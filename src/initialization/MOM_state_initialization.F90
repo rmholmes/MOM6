@@ -57,6 +57,9 @@ use external_gwave_initialization, only : external_gwave_initialize_thickness
 use DOME2d_initialization, only : DOME2d_initialize_thickness
 use DOME2d_initialization, only : DOME2d_initialize_temperature_salinity
 use DOME2d_initialization, only : DOME2d_initialize_sponges
+use ABMIX2d_initialization, only : ABMIX2d_initialize_thickness
+use ABMIX2d_initialization, only : ABMIX2d_initialize_temperature_salinity
+use ABMIX2d_initialization, only : ABMIX2d_initialize_sponges
 use adjustment_initialization, only : adjustment_initialize_thickness
 use adjustment_initialization, only : adjustment_initialize_temperature_salinity
 use sloshing_initialization, only : sloshing_initialize_thickness
@@ -220,6 +223,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                " \t\t densities. This is not yet implemented. \n"//&
                " \t circle_obcs - the circle_obcs test case is used. \n"//&
                " \t DOME2D - 2D version of DOME initialization. \n"//&
+               " \t ABMIX2D - 2D version of ABMIX initialization. \n"//&
                " \t adjustment2d - TBD AJA. \n"//&
                " \t sloshing - TBD AJA. \n"//&
                " \t seamount - TBD AJA. \n"//&
@@ -246,6 +250,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
          case ("lock_exchange"); call lock_exchange_initialize_thickness(h, G, GV, PF)
          case ("external_gwave"); call external_gwave_initialize_thickness(h, G, PF)
          case ("DOME2D"); call DOME2d_initialize_thickness(h, G, GV, PF)
+         case ("ABMIX2D"); call ABMIX2d_initialize_thickness(h, G, GV, PF)
          case ("adjustment2d"); call adjustment_initialize_thickness(h, G, GV, PF)
          case ("sloshing"); call sloshing_initialize_thickness(h, G, GV, PF)
          case ("seamount"); call seamount_initialize_thickness(h, G, GV, PF)
@@ -271,6 +276,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                " \t benchmark - use the benchmark test case T & S. \n"//&
                " \t linear - linear in logical layer space. \n"//&
                " \t DOME2D - 2D DOME initialization. \n"//&
+               " \t ABMIX2D - 2D ABMIX initialization. \n"//&
                " \t ISOMIP - ISOMIP initialization. \n"//&
                " \t adjustment2d - TBD AJA. \n"//&
                " \t sloshing - TBD AJA. \n"//&
@@ -288,6 +294,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
           case ("TS_profile") ; call initialize_temp_salt_from_profile(tv%T, tv%S, G, PF)
           case ("linear"); call initialize_temp_salt_linear(tv%T, tv%S, G, PF)
           case ("DOME2D"); call DOME2d_initialize_temperature_salinity ( tv%T, &
+                                tv%S, h, G, PF, eos)
+          case ("ABMIX2D"); call ABMIX2d_initialize_temperature_salinity ( tv%T, &
                                 tv%S, h, G, PF, eos)
           case ("ISOMIP"); call ISOMIP_initialize_temperature_salinity ( tv%T, &
                                 tv%S, h, G, GV, PF, eos)
@@ -408,6 +416,8 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
     select case (trim(config))
       case ("DOME"); call DOME_initialize_sponges(G, GV, tv, PF, sponge_CSp)
       case ("DOME2D"); call DOME2d_initialize_sponges(G, GV, tv, PF, useALE, &
+                                                      sponge_CSp, ALE_sponge_CSp)
+      case ("ABMIX2D"); call ABMIX2d_initialize_sponges(G, GV, tv, PF, useALE, &
                                                       sponge_CSp, ALE_sponge_CSp)
       case ("ISOMIP"); call ISOMIP_initialize_sponges(G, GV, tv, PF, ALE_sponge_CSp)
       case ("USER"); call user_initialize_sponges(G, use_temperature, tv, &
