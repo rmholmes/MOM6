@@ -139,11 +139,12 @@ subroutine ABMIX2d_initialize_thickness ( h, G, GV, param_file )
           endif
         enddo
 
-         x = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
-         if ( x .le. dome2d_width_bay ) then
-           h(i,j,1:nz-1) = GV%Angstrom;
-           h(i,j,nz) = dome2d_depth_bay * G%max_depth - (nz-1) * GV%Angstrom;
-         end if
+!!$ COMMENTED OUT TO REMOVE INITIAL DENSE WATER ON SHELF:
+!!$         x = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
+!!$         if ( x .le. dome2d_width_bay ) then
+!!$           h(i,j,1:nz-1) = GV%Angstrom;
+!!$           h(i,j,nz) = dome2d_depth_bay * G%max_depth - (nz-1) * GV%Angstrom;
+!!$         end if
 
       end do ; end do
 

@@ -63,7 +63,7 @@ module user_surface_forcing
 use MOM_diag_mediator, only : post_data, query_averaging_enabled
 use MOM_diag_mediator, only : register_diag_field, diag_ctrl
 use MOM_domains, only : pass_var, pass_vector, AGRID
-use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
+use MOM_error_handler, only : MOM_error, FATAL, NOTE, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, param_file_type, log_version
 use MOM_forcing_type, only : forcing, allocate_forcing_type
 use MOM_grid, only : ocean_grid_type
@@ -94,7 +94,10 @@ type, public :: user_surface_forcing_CS ; private
   real :: Flux_const         !   The restoring rate at the surface, in m s-1.
   real :: gust_const         !   A constant unresolved background gustiness
                              ! that contributes to ustar, in Pa.
-
+  real :: D_Open             ! ABMIX: Density to restore to in open ocean
+  real :: D_Shelf            ! ABMIX: Density to restore to on shelf
+  real :: S_Width            ! ABMIX: Non-dimensional shelf width
+  
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
 end type user_surface_forcing_CS
@@ -206,13 +209,15 @@ subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
 
+  real    :: x
+
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   !   When modifying the code, comment out this error message.  It is here
   ! so that the original (unmodified) version is not accidentally used.
-  call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
-    "User forcing routine called without modification." )
+!  call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
+!    "User forcing routine called without modification." )
 
   ! Allocate and zero out the forcing arrays, as necessary.  This portion is
   ! usually not changed.
@@ -285,19 +290,27 @@ subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
     else
       !   When modifying the code, comment out this error message.  It is here
       ! so that the original (unmodified) version is not accidentally used.
-      call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
-        "Buoyancy restoring used without modification." )
+      ! call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
+      !   "Buoyancy restoring used without modification." )
 
       ! The -1 is because density has the opposite sign to buoyancy.
       buoy_rest_const = -1.0 * (CS%G_Earth * CS%Flux_const) / CS%Rho0
+      
       do j=js,je ; do i=is,ie
        !   Set density_restore to an expression for the surface potential
        ! density in kg m-3 that is being restored toward.
-        density_restore = 1030.0
-
+         ! ABMIX:
+        x = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
+        
+        if ( x .le. CS%S_Width ) then
+           density_restore = CS%D_Shelf
+        else
+           density_restore = CS%D_Open
+        end if
+       
         fluxes%buoy(i,j) = G%mask2dT(i,j) * buoy_rest_const * &
                           (density_restore - state%sfc_density(i,j))
-      enddo ; enddo
+     enddo; enddo
     endif
   endif                                             ! end RESTOREBUOY
 
@@ -346,6 +359,16 @@ subroutine USER_surface_forcing_init(Time, G, param_file, diag, CS)
   call get_param(param_file, mod, "ENABLE_THERMODYNAMICS", CS%use_temperature, &
                  "If true, Temperature and salinity are used as state \n"//&
                  "variables.", default=.true.)
+
+  call get_param(param_file, mod, "ABMIX2D_D_Open", CS%D_Open, &
+                 'Density to restore to in open ocean, in 2d ABMIX configuration.', &
+                 units='kg m-3',default=1035.0)
+  call get_param(param_file, mod, "ABMIX2D_D_Shelf", CS%D_Shelf, &
+                 'Density to restore to on shelf, in 2d ABMIX configuration.', &
+                 units='kg m-3',default=1035.0)
+  call get_param(param_file, mod, "ABMIX2D_SHELF_WIDTH", CS%S_Width, &
+                 'Width of shelf, as fraction of domain, in 2d ABMIX configuration.', &
+                 units='nondim',default=0.1)
 
   call get_param(param_file, mod, "G_EARTH", CS%G_Earth, &
                  "The gravitational acceleration of the Earth.", &
