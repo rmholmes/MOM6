@@ -147,6 +147,8 @@ type, public :: surface_forcing_CS ; private
                              ! buoyancy_forcing_linear
   real :: S_north, S_south   ! target salinity at north and south used in
                              ! buoyancy_forcing_linear
+  real :: D_north, D_south   ! target density at north and south used in
+                             ! buoyancy_forcing_linear
 
   logical :: first_call_set_forcing = .true.
   logical :: archaic_OMIP_file = .true.
@@ -1447,16 +1449,18 @@ subroutine buoyancy_forcing_linear(state, fluxes, day, dt, G, CS)
         endif
       enddo ; enddo
     else
-      call MOM_error(FATAL, "buoyancy_forcing_linear in MOM_surface_forcing: "// &
-                     "RESTOREBUOY to linear not written yet.")
-     !do j=js,je ; do i=is,ie
-     !  if (G%mask2dT(i,j) > 0) then
-     !    fluxes%buoy(i,j) = (CS%Dens_Restore(i,j) - state%sfc_density(i,j)) * &
-     !                       (CS%G_Earth*CS%Flux_const/CS%Rho0)
-     !  else
-     !    fluxes%buoy(i,j) = 0.0
-     !  endif
-     !enddo ; enddo
+!      call MOM_error(FATAL, "buoyancy_forcing_linear in MOM_surface_forcing: "// &
+!                     "RESTOREBUOY to linear not written yet.")
+      do j=js,je ; do i=is,ie
+        y = (G%geoLatCu(I,j)-CS%South_lat)/CS%len_lat
+        T_Restore = CS%D_south + (CS%D_north-CS%D_south)*y
+        if (G%mask2dT(i,j) > 0) then
+          fluxes%buoy(i,j) = -1.0 * (T_Restore - state%sfc_density(i,j)) * &
+              (CS%G_Earth*CS%Flux_const/CS%Rho0)
+        else
+          fluxes%buoy(i,j) = 0.0
+        endif
+      enddo ; enddo
     endif
   else                                              ! not RESTOREBUOY
     if (.not.CS%use_temperature) then
@@ -1791,6 +1795,14 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, tracer_flow_CSp)
                  "With buoy_config linear, the sea surface salinity \n"//&
                  "at the southern end of the domain toward which to \n"//&
                  "to restore.", units="PSU", default=35.0)
+      call get_param(param_file, mod, "D_NORTH", CS%D_north, &
+                 "With buoy_config linear, the density              \n"//&
+                 "at the northern end of the domain toward which to \n"//&
+                 "to restore.", units="KGM-3", default=1035.0)
+      call get_param(param_file, mod, "D_SOUTH", CS%D_south, &
+                 "With buoy_config linear, the density              \n"//&
+                 "at the southern end of the domain toward which to \n"//&
+                 "to restore.", units="KGM-3", default=1035.0)
     endif
   endif
   call get_param(param_file, mod, "G_EARTH", CS%G_Earth, &
