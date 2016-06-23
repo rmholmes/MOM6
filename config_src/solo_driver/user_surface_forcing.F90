@@ -302,7 +302,7 @@ subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
          ! ABMIX:
         x = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
         
-        if ( x .le. CS%S_Width ) then
+        if ( x .le. 0.1 ) then
            density_restore = CS%D_Shelf
         else
            density_restore = CS%D_Open
