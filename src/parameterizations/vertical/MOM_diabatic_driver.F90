@@ -158,6 +158,9 @@ type, public :: diabatic_CS ; private
   integer :: id_diabatic_diff_salt_tend_2d  = -1
   logical :: diabatic_diff_tendency_diag    = .false.
 
+  logical :: BottomWaterInput               ! Input variables for Bottom Water Input
+  real    :: bwi_y1, bwi_y2, bwi_vf         ! 
+
   integer :: id_boundary_forcing_temp_tend    = -1
   integer :: id_boundary_forcing_saln_tend    = -1
   integer :: id_boundary_forcing_heat_tend    = -1
@@ -318,6 +321,8 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
                   ! (H units = m for Bouss, kg/m^2 for non-Bouss).
   real :: dt_mix  ! amount of time over which to apply mixing (seconds)
   real :: Idt     ! inverse time step (1/s)
+
+  real :: y, ta, y1, y2, vf ! temporary variables for bottom water input
 
   type(p3d) :: z_ptrs(7)  ! pointers to diagnostics to be interpolated to depth
   integer :: num_z_diags  ! number of diagnostics to be interpolated to depth
@@ -832,6 +837,41 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   endif
   if (showCallTree) call callTree_waypoint("done with h=ea-eb (diabatic)")
   if (CS%debugConservation) call MOM_state_stats('h=ea-eb', u, v, h, tv%T, tv%S, G)
+  
+  if (CS%BottomWaterInput) then
+  ! If BOTTOM_WATER_INPUT = True then the thickness of the densest layer is
+  ! increased artificially here to simulate an input volume flux of
+  ! bottom water. The flux is added between the y-values determined by
+  ! BOTTOM_WATER_Y1 and BOTTOM_WATER_Y2 (fractional values), with magnitude
+  ! BOTTOM_WATER_FLUX (in m3s-1).
+
+    y1 = CS%bwi_y1 ! southern extent of flux area (fractional)
+    y2 = CS%bwi_y2 ! northern extent of flux area (fractional)
+    vf = CS%bwi_vf ! Total volume flux added (m3s-1)
+
+    ! Calculate total area used for flux addition:
+    ta = 0.0
+    do j=js,je
+      do i=is,ie
+         y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
+
+         if (( y .gt. y1 ) .and. ( y .lt. y2 )) then
+            ta = ta + G%areaT(i,j)
+         endif
+      enddo
+    enddo
+
+    do j=js,je
+      do i=is,ie
+
+         y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
+         
+         if (( y .gt. y1 ) .and. ( y .lt. y2 )) then
+            h(i,j,nz) = h(i,j,nz) + dt * vf / ta
+         endif
+      enddo
+    enddo
+  endif ! end Bottom Water Input
 
 
   ! Here, T and S are updated according to ea and eb.
@@ -1854,6 +1894,21 @@ subroutine diabatic_driver_init(Time, G, GV, param_file, useALEalgorithm, diag, 
                  "allow for explicitly specified bottom fluxes. The \n"//&
                  "entrainment at the bottom is at least sqrt(Kd_BBL_tr*dt) \n"//&
                  "over the same distance.", units="m2 s-1", default=0.)
+  endif
+
+  ! Get parameters for Bottom Water Input:
+  call get_param(param_file, mod, "BOTTOM_WATER_INPUT", CS%BottomWaterInput, &
+               "If true, add a flux of bottom water by increasing the thickness \n"//&
+               "of the bottom layer at each time step.", default=.false.)
+  if (CS%BottomWaterInput) then
+     call get_param(param_file, mod, "BOTTOM_WATER_Y1", CS%bwi_y1, &
+                 "Southern-most extent of bottom water input (as fraction of \n"//&
+                 "domain size)", default=0.0)
+     call get_param(param_file, mod, "BOTTOM_WATER_Y2", CS%bwi_y2, &
+                 "Northern-most extend of bottom water input (as fraction of \n"//&
+                 "domain size)", default=1.0)
+     call get_param(param_file, mod, "BOTTOM_WATER_FLUX", CS%bwi_vf, &
+                 "Bottom water input volume flux (in m3s-1)", default=1.0E06)
   endif
 
   ! Register all available diagnostics for this module.
