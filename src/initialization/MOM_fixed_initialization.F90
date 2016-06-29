@@ -30,6 +30,7 @@ use DOME_initialization, only : DOME_initialize_topography, DOME_set_OBC_positio
 use ISOMIP_initialization, only : ISOMIP_initialize_topography
 use benchmark_initialization, only : benchmark_initialize_topography
 use DOME2d_initialization, only : DOME2d_initialize_topography
+use ABMIX2D_initialization, only : ABMIX2D_initialize_topography
 use sloshing_initialization, only : sloshing_initialize_topography
 use seamount_initialization, only : seamount_initialize_topography
 use Phillips_initialization, only : Phillips_initialize_topography
@@ -209,6 +210,9 @@ subroutine MOM_initialize_topography(D, max_depth, G, PF)
                  " \t\t ISOMIP test case. \n"//&
                  " \t DOME2D - use a shelf and slope configuration for the \n"//&
                  " \t\t DOME2D gravity current/overflow test case. \n"//&
+                 " \t ABMIX2D - use topography from the ABMIX2D case,\n"//&
+                 " \t\t initially a shelf and slope configuration based on \n"//&
+                 " \t\t the DOME2D flow_downslope test case. Ryan Holmes June 2016 \n"//&
                  " \t seamount - Gaussian bump for spontaneous motion test case.\n"//&
                  " \t Phillips - ACC-like idealized topography used in the Phillips config.\n"//&
                  " \t USER - call a user modified routine.", &
@@ -224,6 +228,7 @@ subroutine MOM_initialize_topography(D, max_depth, G, PF)
     case ("ISOMIP");    call ISOMIP_initialize_topography(D, G, PF, max_depth)
     case ("benchmark"); call benchmark_initialize_topography(D, G, PF, max_depth)
     case ("DOME2D");    call DOME2d_initialize_topography(D, G, PF, max_depth)
+    case ("ABMIX2D");    call ABMIX2D_initialize_topography(D, G, PF, max_depth)
     case ("sloshing");  call sloshing_initialize_topography(D, G, PF, max_depth)
     case ("seamount");  call seamount_initialize_topography(D, G, PF, max_depth)
     case ("Phillips");  call Phillips_initialize_topography(D, G, PF, max_depth)

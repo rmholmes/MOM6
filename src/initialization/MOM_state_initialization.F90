@@ -57,6 +57,7 @@ use external_gwave_initialization, only : external_gwave_initialize_thickness
 use DOME2d_initialization, only : DOME2d_initialize_thickness
 use DOME2d_initialization, only : DOME2d_initialize_temperature_salinity
 use DOME2d_initialization, only : DOME2d_initialize_sponges
+use ABMIX2D_initialization, only : ABMIX2D_initialize_thickness
 use adjustment_initialization, only : adjustment_initialize_thickness
 use adjustment_initialization, only : adjustment_initialize_temperature_salinity
 use sloshing_initialization, only : sloshing_initialize_thickness
@@ -220,6 +221,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                " \t\t densities. This is not yet implemented. \n"//&
                " \t circle_obcs - the circle_obcs test case is used. \n"//&
                " \t DOME2D - 2D version of DOME initialization. \n"//&
+               " \t ABMIX2D - ABMIX2D initialization. RMH \n"//&
                " \t adjustment2d - TBD AJA. \n"//&
                " \t sloshing - TBD AJA. \n"//&
                " \t seamount - TBD AJA. \n"//&
@@ -246,6 +248,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
          case ("lock_exchange"); call lock_exchange_initialize_thickness(h, G, GV, PF)
          case ("external_gwave"); call external_gwave_initialize_thickness(h, G, PF)
          case ("DOME2D"); call DOME2d_initialize_thickness(h, G, GV, PF)
+         case ("ABMIX2D"); call ABMIX2D_initialize_thickness(h, G, GV, PF)
          case ("adjustment2d"); call adjustment_initialize_thickness(h, G, GV, PF)
          case ("sloshing"); call sloshing_initialize_thickness(h, G, GV, PF)
          case ("seamount"); call seamount_initialize_thickness(h, G, GV, PF)
