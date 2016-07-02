@@ -93,6 +93,10 @@ type, public :: entrain_diffusive_CS ; private
                              ! used to calculate the diapycnal entrainment.
   real    :: Tolerance_Ent   ! The tolerance with which to solve for entrainment
                              ! values, in m.
+  logical :: Set_Bflux       ! Parameters for setting the the buoyancy flux
+  real    :: sbf_bbl_thickness ! explicitely to a bottom intensified exponential
+  real    :: sbf_decay_scale ! profile. 
+  real    :: sbf_B0          ! 
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
   integer :: id_Kd = -1, id_diff_work = -1
@@ -257,6 +261,9 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
   real :: Idt        ! The inverse of the time step, in s-1.
   real :: H_to_m, m_to_H  ! Local copies of unit conversion factors.
 
+  real :: zcur, B0, BBLt, efold ! Parameters for setting bottom
+                     ! intensified mixing exponential profile
+  
   logical :: do_any
   logical :: do_i(SZI_(G)), did_i(SZI_(G)), reiterate, correct_density
   integer :: it, i, j, k, is, ie, js, je, nz, K2, kmb
@@ -734,6 +741,32 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
       endif ; enddo ; enddo
     endif ! (it == (CS%max_ent_it))
 
+    if (CS%Set_Bflux) then
+    ! If Set_Bflux = True then the buoyancy flux is set explicitely
+    ! to a bottom intensified exponential profile
+
+       B0 = CS%sbf_B0 !Flux at top of BBL
+       BBLt = CS%sbf_BBL_thickness !BBL thickness
+       efold = CS%sbf_decay_scale !e-folding scale
+
+       do i=is,ie
+          zcur = 0.0
+          do k=nz,1,-1
+             zcur = zcur + h(i,j,k)/2.0
+             if (zcur .lt. BBLt) then
+                F(i,k) = B0 * zcur / BBLt
+             else
+                F(i,k) = B0 * EXP( - ( zcur - BBLt) / efold )
+             endif
+             zcur = zcur + h(i,j,k)/2.0
+          enddo
+       enddo
+       ! TODO: - Average over layer thickness, rather than assume
+       ! layer is just at center point.
+       ! - Units of F?
+       ! - Limiters on F?
+    endif
+ 
     call F_to_ent(F, h, kb, kmb, j, G, GV, CS, dsp1_ds, eakb, Ent_bl, ea, eb)
 
     !   Calculate the layer thicknesses after the entrainment to constrain the
@@ -2102,7 +2135,20 @@ subroutine entrain_diffusive_init(Time, G, GV, param_file, diag, CS)
   call get_param(param_file, mod, "TOLERANCE_ENT", CS%Tolerance_Ent, &
                  "The tolerance with which to solve for entrainment values.", &
                  units="m", default=MAX(100.0*GV%Angstrom,1.0e-4*sqrt(dt*Kd)))
-
+  call get_param(param_file, mod, "SET_BFLUX", CS%Set_Bflux, &
+                 "Option to explicitely set the buoyancy flux to a \n"//&
+                 "bottom intensified exponential profile.", default=.false.)
+  call get_param(param_file, mod, "SBF_BBL_THICKNESS", CS%sbf_bbl_thickness, &
+                 "The thickness of the BBL (in m) within which the buoyancy \n"// &
+                 "flux decays linearly.", units="m", default=50.0)
+  call get_param(param_file, mod, "SBF_DECAY_SCALE", CS%sbf_decay_scale, &
+                 "The e-folding decay scale (in m) of the buoyancy flux \n"// &
+                 "above the BBL.", units="m", default=500.0)
+  call get_param(param_file, mod, "SBF_B0", CS%sbf_B0, &
+                 "The maximum buoyancy flux at the top of the BBL (in m2s-3).", &
+                 units="m2s-3", default=0.1)
+  ! TODO: Register F as a diag field to get output?
+  
   CS%id_Kd = register_diag_field('ocean_model', 'Kd_effective', diag%axesTL, Time, &
       'Diapycnal diffusivity as applied', 'meter2 second-1')
   CS%id_diff_work = register_diag_field('ocean_model', 'diff_work', diag%axesTi, Time, &
