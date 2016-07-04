@@ -754,17 +754,17 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
           do k=nz,1,-1
              zcur = zcur + h(i,j,k)/2.0
              if (zcur .lt. BBLt) then
-                F(i,k) = B0 * zcur / BBLt
+                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k), &
+                      dt*B0/GV%g_prime(k)*zcur/BBLt))
              else
-                F(i,k) = B0 * EXP( - ( zcur - BBLt) / efold )
+                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k), & 
+                      dt*B0/GV%g_prime(k)*EXP(-(zcur-BBLt)/efold)))
              endif
              zcur = zcur + h(i,j,k)/2.0
           enddo
        enddo
        ! TODO: - Average over layer thickness, rather than assume
-       ! layer is just at center point.
-       ! - Units of F?
-       ! - Limiters on F?
+       ! layer is just at center point????
     endif
  
     call F_to_ent(F, h, kb, kmb, j, G, GV, CS, dsp1_ds, eakb, Ent_bl, ea, eb)
@@ -2146,7 +2146,7 @@ subroutine entrain_diffusive_init(Time, G, GV, param_file, diag, CS)
                  "above the BBL.", units="m", default=500.0)
   call get_param(param_file, mod, "SBF_B0", CS%sbf_B0, &
                  "The maximum buoyancy flux at the top of the BBL (in m2s-3).", &
-                 units="m2s-3", default=0.1)
+                 units="m2s-3", default=1.0E-09)
   ! TODO: Register F as a diag field to get output?
   
   CS%id_Kd = register_diag_field('ocean_model', 'Kd_effective', diag%axesTL, Time, &
