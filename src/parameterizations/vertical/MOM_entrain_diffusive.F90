@@ -99,7 +99,7 @@ type, public :: entrain_diffusive_CS ; private
   real    :: sbf_B0          ! 
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
-  integer :: id_Kd = -1, id_diff_work = -1
+  integer :: id_Kd = -1, id_diff_work = -1, id_Fb = -1
 end type entrain_diffusive_CS
 
 contains
@@ -176,9 +176,9 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
     Kd_eff, &     ! The effective diffusivity that actually applies to each
                   ! layer after the effects of boundary conditions are
                   ! considered, in m2 s-1.
-    diff_work     ! The work actually done by diffusion across each
+    diff_work, &  ! The work actually done by diffusion across each
                   ! interface, in W m-2.  Sum vertically for the total work.
-
+    Fb            ! The actual buoyancy flux in each layer, in m2s-3.
   real :: hm, fm, fr, fk  ! Work variables with units of H, H, H, and H2.
 
   real :: b1(SZI_(G))         ! b1 and c1 are variables used by the
@@ -309,6 +309,7 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
 
   if (CS%id_diff_work > 0) allocate(diff_work(G%isd:G%ied,G%jsd:G%jed,nz+1))
   if (CS%id_Kd > 0)        allocate(Kd_eff(G%isd:G%ied,G%jsd:G%jed,nz))
+  if (CS%id_Fb > 0)        allocate(Fb(G%isd:G%ied,G%jsd:G%jed,nz))
 
   correct_density = (CS%correct_density .and. associated(tv%eqn_of_state))
   if (correct_density) then
@@ -902,6 +903,12 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
 
     endif   ! correct_density
 
+    if (CS%id_Fb > 0) then
+       do k=1,nz ; do i=is,ie
+          Fb(i,j,k) = F(i,k) / dt * GV%g_prime(k)
+       enddo; enddo
+    endif
+    
     if (CS%id_Kd > 0) then
       Idt = 1.0 / dt
       do k=2,nz-1 ; do i=is,ie
@@ -971,6 +978,8 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
   enddo ! end of j loop
 
 ! Offer diagnostic fields for averaging.
+  if (CS%id_Fb > 0) call post_data(CS%id_Fb, Fb, CS%diag)
+  if (CS%id_Fb > 0) deallocate(Fb)
   if (CS%id_Kd > 0) call post_data(CS%id_Kd, Kd_eff, CS%diag)
   if (CS%id_Kd > 0) deallocate(Kd_eff)
   if (CS%id_diff_work > 0) call post_data(CS%id_diff_work, diff_work, CS%diag)
@@ -2148,7 +2157,9 @@ subroutine entrain_diffusive_init(Time, G, GV, param_file, diag, CS)
                  "The maximum buoyancy flux at the top of the BBL (in m2s-3).", &
                  units="m2s-3", default=1.0E-09)
   ! TODO: Register F as a diag field to get output?
-  
+
+  CS%id_Fb = register_diag_field('ocean_model', 'buoyancy_flux', diag%axesTL, Time, &
+      'Buoyancy flux as applied', 'meter2 second-3')
   CS%id_Kd = register_diag_field('ocean_model', 'Kd_effective', diag%axesTL, Time, &
       'Diapycnal diffusivity as applied', 'meter2 second-1')
   CS%id_diff_work = register_diag_field('ocean_model', 'diff_work', diag%axesTi, Time, &
