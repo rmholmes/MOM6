@@ -36,8 +36,7 @@ subroutine ABMIX2D_initialize_topography ( D, G, param_file, max_depth )
   real,                               intent(in)  :: max_depth  !< Maximum depth of model in m
   ! Local variables
   integer :: i, j
-  real    :: y, l1
-  real    :: idepth, basin_width
+  real    :: y, yb, a, b, c, basin_width, idepth
 
   call get_param(param_file, mod, "ABMIX2D_SLOPE_DEPTH", idepth, &
                  'Depth of slope, as fraction of full depth, at y=0 in ABMIX2D configuration.', &
@@ -45,21 +44,38 @@ subroutine ABMIX2D_initialize_topography ( D, G, param_file, max_depth )
   call get_param(param_file, mod, "ABMIX2D_BASIN_WIDTH", basin_width, &
                  'Width of deep ocean basin, as fraction of domain, in ABMIX2D configuration.', &
                  units='nondim',default=0.4)
+  call get_param(param_file, mod, "ABMIX2D_SLOPE_CURV", c, &
+                 'Quadratic coefficient of slope (sets curvature), in ABMIX2D configuration.', &
+                 units='nondim',default=0.0)
 
-  !! The following code sets a simple slope topography
+  !! The following code sets a simple slope topography, which can be
+  !! curved if abs(c)>0
+  !!
+  !! a = depth at y=0
+  !! b = slope of bathymetry, chosen such that bathymetry intersects
+  !! bottom at y = yb = 1 - basin_width.
+  !! c = normalized curvature. c = 1 implies that the bathymetry slope
+  !! is zero at y = 0
+  
+  yb = 1.0 - basin_width
 
-  ! location where downslope reaches maximum depth
-  l1 = 1.0 - basin_width
-
+  a = idepth * max_depth
+  if (yb .gt. 0.0) then
+     c = c * (max_depth - a) / yb / yb
+     b = (max_depth - a - c * yb * yb) / yb 
+  else
+     b = 0.0
+     c = 0.0
+  endif
+  
   do i=G%isc,G%iec
     do j=G%jsc,G%jec
 
       ! Compute normalized meridional coordinate
       y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
 
-      if ( y .lt. l1 ) then
-        D(i,j) = idepth * max_depth + (1.0-idepth) * max_depth * &
-                 ( y / l1)
+      if ( y .lt. yb ) then
+        D(i,j) = a + b * y + c * y * y
       else
         D(i,j) = max_depth
       end if
