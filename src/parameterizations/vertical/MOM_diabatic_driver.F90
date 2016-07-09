@@ -322,7 +322,8 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   real :: dt_mix  ! amount of time over which to apply mixing (seconds)
   real :: Idt     ! inverse time step (1/s)
 
-  real :: y, ta, y1, y2, vf ! temporary variables for bottom water input
+  real :: y, ta, y1, y2, vf           ! temporary variables for bottom water input
+  real :: Vlay, VlayT, Mex, Vex, Mlay ! and associated surface adjustment
 
   type(p3d) :: z_ptrs(7)  ! pointers to diagnostics to be interpolated to depth
   integer :: num_z_diags  ! number of diagnostics to be interpolated to depth
@@ -844,7 +845,12 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   ! bottom water. The flux is added between the y-values determined by
   ! BOTTOM_WATER_Y1 and BOTTOM_WATER_Y2 (fractional values), with magnitude
   ! BOTTOM_WATER_FLUX (in m3s-1).
+  ! 
+  ! Additionally, this extra volume flux is removed at the surface
+  ! using a scheme described below that conserves total volume and
+  ! total mass.
 
+    ! BOTTOM VOLUME INPUT --------------------------------------------
     y1 = CS%bwi_y1 ! southern extent of flux area (fractional)
     y2 = CS%bwi_y2 ! northern extent of flux area (fractional)
     vf = CS%bwi_vf ! Total volume flux added (m3s-1)
@@ -871,6 +877,93 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
          endif
       enddo
     enddo
+    
+    ! SURFACE VOLUME OUTPUT ------------------------------------------
+    ! Here the excess volume is removed by emptying layers starting 
+    ! with the lightest layer. The volume removed from layer k at i,j 
+    ! is proportional to h(i,j,k). The mass excess is updated.
+    Vex = dt * vf            ! Excess volume 
+    Mex = Vex * GV%Rlay(nz)  ! Excess mass
+
+    do k=1,nz       
+      ! Calculate volume in current layer:
+      Vlay = 0.0
+      do j=js,je
+         do i=is,ie
+           Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
+         enddo
+      enddo
+
+      if (Vlay .lt. Vex) then 
+         ! Take layer volume to zero
+         do j=js,je
+           do i=is,ie
+             h(i,j,k) = GV%Angstrom
+           enddo
+         enddo
+         Vex = Vex - Vlay
+         Mex = Mex - Vlay * GV%Rlay(k)
+
+      else
+         ! Remove Vex all from this layer
+         do j=js,je
+           do i=is,ie
+              h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
+                         (1.0 - Vex / Vlay)
+           enddo
+         enddo
+         Vex = 0.0                     ! Zero volume excess
+         Mex = Mex - Vlay * GV%Rlay(k) ! Adjust mass excess
+         exit                          ! Exit k loop
+
+      endif
+    enddo
+    
+    ! SURFACE MASS ADJUST --------------------------------------------
+    ! Here the excess mass is removed by shifting volume from 
+    ! layers 2, 3 .... to the lightest layer while conserving total
+    ! volume.
+
+    do k=2,nz
+      ! Calculate volume in this layer and top layer:
+      Vlay = 0.0
+      VlayT = 0.0
+      do j=js,je
+         do i=is,ie
+           Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
+           VlayT = VlayT + G%areaT(i,j) * (h(i,j,1) - GV%Angstrom)
+         enddo
+      enddo
+      ! Mass excess that could be removed by adjusting this layer:
+      Mlay = Vlay * (GV%Rlay(k) - GV%Rlay(1)) 
+      
+      if (Mlay .lt. Mex) then
+        ! Remove all volume from this layer, add back into layer 1
+        do j=js,je
+          do i=is,ie
+            h(i,j,k) = GV%Angstrom
+            h(i,j,1) = GV%Angstrom + (h(i,j,1) - GV%Angstrom) * &
+                         (1.0 + Vlay / VlayT)
+           enddo
+        enddo
+        Mex = Mex - Mlay ! Reduce mass excess
+
+      else
+        ! Remove all excess mass by adjusting this layer:
+        do j=js,je
+          do i=is,ie
+            h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
+                (1.0 - Mex / ( GV%Rlay(k) - GV%Rlay(1) ) / Vlay)
+            h(i,j,1) = GV%Angstrom + (h(i,j,1) - GV%Angstrom) * &
+                (1.0 + Mex / ( GV%Rlay(k) - GV%Rlay(1) ) / VlayT)
+          enddo
+        enddo
+        Mex = 0.0
+        exit       ! All mass excess removed, exit loop
+
+      endif
+    enddo
+
   endif ! end Bottom Water Input
 
 
