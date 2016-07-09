@@ -322,7 +322,7 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   real :: dt_mix  ! amount of time over which to apply mixing (seconds)
   real :: Idt     ! inverse time step (1/s)
 
-  real :: y, ta, y1, y2, vf ! temporary variables for bottom water input
+  real :: y, dh, y1, y2, vf ! temporary variables for bottom water input
 
   type(p3d) :: z_ptrs(7)  ! pointers to diagnostics to be interpolated to depth
   integer :: num_z_diags  ! number of diagnostics to be interpolated to depth
@@ -849,17 +849,8 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     y2 = CS%bwi_y2 ! northern extent of flux area (fractional)
     vf = CS%bwi_vf ! Total volume flux added (m3s-1)
 
-    ! Calculate total area used for flux addition:
-    ta = 0.0
-    do j=js,je
-      do i=is,ie
-         y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
-
-         if (( y .gt. y1 ) .and. ( y .lt. y2 )) then
-            ta = ta + G%areaT(i,j)
-         endif
-      enddo
-    enddo
+    ! Thickness to add:
+    dh = dt * vf / ( G%areaT_global * (y2 - y1) )
 
     do j=js,je
       do i=is,ie
@@ -867,7 +858,7 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
          y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
          
          if (( y .gt. y1 ) .and. ( y .lt. y2 )) then
-            h(i,j,nz) = h(i,j,nz) + dt * vf / ta
+            h(i,j,nz) = h(i,j,nz) + dh
          endif
       enddo
     enddo
