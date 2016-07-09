@@ -159,6 +159,7 @@ type, public :: diabatic_CS ; private
   logical :: diabatic_diff_tendency_diag    = .false.
 
   logical :: BottomWaterInput               ! Input variables for Bottom Water Input
+  logical :: BottomWaterOutput              !
   real    :: bwi_y1, bwi_y2, bwi_vf         ! 
 
   integer :: id_boundary_forcing_temp_tend    = -1
@@ -869,6 +870,7 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
       enddo
     enddo
     
+    if (CS%BottomWaterOutput) then
     ! SURFACE VOLUME OUTPUT ------------------------------------------
     ! Here the excess volume is removed by emptying layers starting 
     ! with the lightest layer. The volume removed from layer k at i,j 
@@ -955,7 +957,7 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
 
       endif
     enddo
-
+    endif ! end Bottom Water Output
   endif ! end Bottom Water Input
 
 
@@ -1994,6 +1996,10 @@ subroutine diabatic_driver_init(Time, G, GV, param_file, useALEalgorithm, diag, 
                  "domain size)", default=1.0)
      call get_param(param_file, mod, "BOTTOM_WATER_FLUX", CS%bwi_vf, &
                  "Bottom water input volume flux (in m3s-1)", default=1.0E06)
+     call get_param(param_file, mod, "BOTTOM_WATER_OUTPUT", CS%BottomWaterOutput, &
+                 "If true, conserve total volume and mass with a bottom water \n"//&
+                 "flux by removing an equivalent flux from the surface.", &
+                  default=.true.)
   endif
 
   ! Register all available diagnostics for this module.
