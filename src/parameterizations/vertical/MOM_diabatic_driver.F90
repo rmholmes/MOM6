@@ -324,8 +324,6 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
 
   real :: y, dh, y1, y2, vf ! temporary variables for bottom water input
   real :: Vlay, VlayT, Mex, Vex, Mlay ! and associated surface adjustment
-  real :: tmp1, tmp2                  ! temp variables
-  character(len=1024) :: message
 
   type(p3d) :: z_ptrs(7)  ! pointers to diagnostics to be interpolated to depth
   integer :: num_z_diags  ! number of diagnostics to be interpolated to depth
@@ -878,12 +876,6 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     Vex = dt * vf            ! Excess volume 
     Mex = Vex * GV%Rlay(nz)  ! Excess mass
 
-    tmp1 = dt * vf / ta
-    write(message,*) "Mex ", Mex, "Vex ", Vex, "dt ", dt, "vf ", vf, &
-                  "ta ", ta, "dt*vf/ta ", tmp1, "js ", js, "je ", je, &
-                  "is ", is, "ie ", ie
-    call MOM_error(WARNING, message)
-
     do k=1,nz       
       ! Calculate volume in current layer:
       Vlay = 0.0
@@ -911,8 +903,8 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
                          (1.0 - Vex / Vlay)
            enddo
          enddo
+         Mex = Mex - Vex * GV%Rlay(k) ! Adjust mass excess
          Vex = 0.0                     ! Zero volume excess
-         Mex = Mex - Vlay * GV%Rlay(k) ! Adjust mass excess
          exit                          ! Exit k loop
 
       endif
@@ -924,14 +916,6 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     ! volume. The thickness of the lightest layer is increased
     ! uniformly as opposed to proportional to its thickness at i,j to
     ! avoid possibly dividing by a small number. 
-
-    ! Calculate total area used for volume addition:
-    ta = 0.0
-    do j=js,je
-      do i=is,ie
-            ta = ta + G%areaT(i,j)
-      enddo
-    enddo
 
     do k=2,nz
       ! Calculate volume in this layer and top layer:
@@ -951,20 +935,19 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
         do j=js,je
           do i=is,ie
             h(i,j,k) = GV%Angstrom
-            h(i,j,1) = h(i,j,1) + Vlay / ta
+            h(i,j,1) = h(i,j,1) + Vlay / G%areaT_global
            enddo
         enddo
         Mex = Mex - Mlay ! Reduce mass excess
 
       else
         ! Remove all excess mass by adjusting this layer:
-         tmp1 = Mex / ta
-         tmp2 = Mex / Vlay
         do j=js,je
           do i=is,ie
             h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
-                (1.0 - tmp2  / ( GV%Rlay(k) - GV%Rlay(1) ))
-            h(i,j,1) = h(i,j,1) + tmp1 / (GV%Rlay(k) - GV%Rlay(1))
+                (1.0 - (Mex/Vlay) / ( GV%Rlay(k) - GV%Rlay(1) ))
+            h(i,j,1) = h(i,j,1) + (Mex / G%areaT_global) &
+                         / (GV%Rlay(k) - GV%Rlay(1))
           enddo
         enddo
         Mex = 0.0
