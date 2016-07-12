@@ -56,6 +56,7 @@ use MOM_variables,           only : thermo_var_ptrs, vertvisc_type, accel_diag_p
 use MOM_variables,           only : cont_diag_ptrs, MOM_thermovar_chksum, p3d
 use MOM_verticalGrid,        only : verticalGrid_type
 use MOM_wave_speed,          only : wave_speeds
+use MOM_coms,                only : num_PEs
 use time_manager_mod,        only : increment_time ! for testing itides (BDM)
 
 implicit none ; private
@@ -875,6 +876,15 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     ! Here the excess volume is removed by emptying layers starting 
     ! with the lightest layer. The volume removed from layer k at i,j 
     ! is proportional to h(i,j,k). The mass excess is updated.
+
+    ! Note that this currently only works in serial mode, because we
+    ! need to know the full layer volume across the whole domain to
+    ! adjust it.
+    if (num_PEs() .gt. 1) then 
+       call MOM_error(FATAL, "MOM_diabatic_driver: Surface removal "// &
+         "of bottom water scheme does not work in parallel yet.")
+    endif
+
     Vex = dt * vf            ! Excess volume 
     Mex = Vex * GV%Rlay(nz)  ! Excess mass
 
