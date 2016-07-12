@@ -56,6 +56,7 @@ use MOM_variables,           only : thermo_var_ptrs, vertvisc_type, accel_diag_p
 use MOM_variables,           only : cont_diag_ptrs, MOM_thermovar_chksum, p3d
 use MOM_verticalGrid,        only : verticalGrid_type
 use MOM_wave_speed,          only : wave_speeds
+use MOM_coms,                only : num_PEs
 use time_manager_mod,        only : increment_time ! for testing itides (BDM)
 
 implicit none ; private
@@ -159,6 +160,7 @@ type, public :: diabatic_CS ; private
   logical :: diabatic_diff_tendency_diag    = .false.
 
   logical :: BottomWaterInput               ! Input variables for Bottom Water Input
+  logical :: BottomWaterOutput              !
   real    :: bwi_y1, bwi_y2, bwi_vf         ! 
 
   integer :: id_boundary_forcing_temp_tend    = -1
@@ -323,6 +325,7 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   real :: Idt     ! inverse time step (1/s)
 
   real :: y, dh, y1, y2, vf ! temporary variables for bottom water input
+  real :: Vlay, VlayT, Mex, Vex, Mlay ! and associated surface adjustment
 
   type(p3d) :: z_ptrs(7)  ! pointers to diagnostics to be interpolated to depth
   integer :: num_z_diags  ! number of diagnostics to be interpolated to depth
@@ -844,7 +847,12 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   ! bottom water. The flux is added between the y-values determined by
   ! BOTTOM_WATER_Y1 and BOTTOM_WATER_Y2 (fractional values), with magnitude
   ! BOTTOM_WATER_FLUX (in m3s-1).
+  ! 
+  ! Additionally, this extra volume flux is removed at the surface
+  ! using a scheme described below that conserves total volume and
+  ! total mass.
 
+    ! BOTTOM VOLUME INPUT --------------------------------------------
     y1 = CS%bwi_y1 ! southern extent of flux area (fractional)
     y2 = CS%bwi_y2 ! northern extent of flux area (fractional)
     vf = CS%bwi_vf ! Total volume flux added (m3s-1)
@@ -862,6 +870,104 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
          endif
       enddo
     enddo
+    
+    if (CS%BottomWaterOutput) then
+    ! SURFACE VOLUME OUTPUT ------------------------------------------
+    ! Here the excess volume is removed by emptying layers starting 
+    ! with the lightest layer. The volume removed from layer k at i,j 
+    ! is proportional to h(i,j,k). The mass excess is updated.
+
+    ! Note that this currently only works in serial mode, because we
+    ! need to know the full layer volume across the whole domain to
+    ! adjust it.
+    if (num_PEs() .gt. 1) then 
+       call MOM_error(FATAL, "MOM_diabatic_driver: Surface removal "// &
+         "of bottom water scheme does not work in parallel yet.")
+    endif
+
+    Vex = dt * vf            ! Excess volume 
+    Mex = Vex * GV%Rlay(nz)  ! Excess mass
+
+    do k=1,nz       
+      ! Calculate volume in current layer:
+      Vlay = 0.0
+      do j=js,je
+         do i=is,ie
+           Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
+         enddo
+      enddo
+
+      if (Vlay .lt. Vex) then 
+         ! Take layer volume to zero
+         do j=js,je
+           do i=is,ie
+             h(i,j,k) = GV%Angstrom
+           enddo
+         enddo
+         Vex = Vex - Vlay
+         Mex = Mex - Vlay * GV%Rlay(k)
+
+      else
+         ! Remove Vex all from this layer
+         do j=js,je
+           do i=is,ie
+              h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
+                         (1.0 - Vex / Vlay)
+           enddo
+         enddo
+         Mex = Mex - Vex * GV%Rlay(k) ! Adjust mass excess
+         Vex = 0.0                     ! Zero volume excess
+         exit                          ! Exit k loop
+
+      endif
+    enddo
+    
+    ! SURFACE MASS ADJUST --------------------------------------------
+    ! Here the excess mass is removed by shifting volume from 
+    ! layers 2, 3 .... to the lightest layer while conserving total
+    ! volume. The thickness of the lightest layer is increased
+    ! uniformly as opposed to proportional to its thickness at i,j to
+    ! avoid possibly dividing by a small number. 
+
+    do k=2,nz
+      ! Calculate volume in this layer and top layer:
+      Vlay = 0.0
+      VlayT = 0.0
+      do j=js,je
+         do i=is,ie
+           Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
+           VlayT = VlayT + G%areaT(i,j) * (h(i,j,1) - GV%Angstrom)
+         enddo
+      enddo
+      ! Mass excess that could be removed by adjusting this layer:
+      Mlay = Vlay * (GV%Rlay(k) - GV%Rlay(1)) 
+
+      if (Mlay .lt. Mex) then
+        ! Remove all volume from this layer, add back into layer 1
+        do j=js,je
+          do i=is,ie
+            h(i,j,k) = GV%Angstrom
+            h(i,j,1) = h(i,j,1) + Vlay / G%areaT_global
+           enddo
+        enddo
+        Mex = Mex - Mlay ! Reduce mass excess
+
+      else
+        ! Remove all excess mass by adjusting this layer:
+        do j=js,je
+          do i=is,ie
+            h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
+                (1.0 - (Mex/Vlay) / ( GV%Rlay(k) - GV%Rlay(1) ))
+            h(i,j,1) = h(i,j,1) + (Mex / G%areaT_global) &
+                         / (GV%Rlay(k) - GV%Rlay(1))
+          enddo
+        enddo
+        Mex = 0.0
+        exit       ! All mass excess removed, exit loop
+
+      endif
+    enddo
+    endif ! end Bottom Water Output
   endif ! end Bottom Water Input
 
 
@@ -1900,6 +2006,10 @@ subroutine diabatic_driver_init(Time, G, GV, param_file, useALEalgorithm, diag, 
                  "domain size)", default=1.0)
      call get_param(param_file, mod, "BOTTOM_WATER_FLUX", CS%bwi_vf, &
                  "Bottom water input volume flux (in m3s-1)", default=1.0E06)
+     call get_param(param_file, mod, "BOTTOM_WATER_OUTPUT", CS%BottomWaterOutput, &
+                 "If true, conserve total volume and mass with a bottom water \n"//&
+                 "flux by removing an equivalent flux from the surface.", &
+                  default=.true.)
   endif
 
   ! Register all available diagnostics for this module.
