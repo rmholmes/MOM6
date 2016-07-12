@@ -860,16 +860,12 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     ! Thickness to add:
     dh = dt * vf / ( G%areaT_global * (y2 - y1) )
 
-    do j=js,je
-      do i=is,ie
-
-         y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;
-         
-         if (( y .gt. y1 ) .and. ( y .lt. y2 )) then
-            h(i,j,nz) = h(i,j,nz) + dh
-         endif
-      enddo
-    enddo
+    do j=js,je ; do i=is,ie
+      y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat;         
+      if (( y .gt. y1 ) .and. ( y .lt. y2 )) then
+         h(i,j,nz) = h(i,j,nz) + dh
+      endif
+    enddo ; enddo
     
     if (CS%BottomWaterOutput) then
     ! SURFACE VOLUME OUTPUT ------------------------------------------
@@ -891,33 +887,27 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     do k=1,nz       
       ! Calculate volume in current layer:
       Vlay = 0.0
-      do j=js,je
-         do i=is,ie
-           Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
-         enddo
-      enddo
+      do j=js,je ; do i=is,ie
+         Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
+      enddo ; enddo
 
       if (Vlay .lt. Vex) then 
          ! Take layer volume to zero
-         do j=js,je
-           do i=is,ie
-             h(i,j,k) = GV%Angstrom
-           enddo
-         enddo
-         Vex = Vex - Vlay
-         Mex = Mex - Vlay * GV%Rlay(k)
+        do j=js,je ; do i=is,ie
+           h(i,j,k) = GV%Angstrom
+        enddo ; enddo
+        Vex = Vex - Vlay
+        Mex = Mex - Vlay * GV%Rlay(k)
 
       else
-         ! Remove Vex all from this layer
-         do j=js,je
-           do i=is,ie
-              h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
-                         (1.0 - Vex / Vlay)
-           enddo
-         enddo
-         Mex = Mex - Vex * GV%Rlay(k) ! Adjust mass excess
-         Vex = 0.0                     ! Zero volume excess
-         exit                          ! Exit k loop
+        ! Remove Vex all from this layer
+        do j=js,je ; do i=is,ie
+           h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
+                (1.0 - Vex / Vlay)
+        enddo ; enddo
+        Mex = Mex - Vex * GV%Rlay(k) ! Adjust mass excess
+        Vex = 0.0                     ! Zero volume excess
+        exit                          ! Exit k loop
 
       endif
     enddo
@@ -933,35 +923,29 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
       ! Calculate volume in this layer and top layer:
       Vlay = 0.0
       VlayT = 0.0
-      do j=js,je
-         do i=is,ie
-           Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
-           VlayT = VlayT + G%areaT(i,j) * (h(i,j,1) - GV%Angstrom)
-         enddo
-      enddo
+      do j=js,je ; do i=is,ie
+         Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
+         VlayT = VlayT + G%areaT(i,j) * (h(i,j,1) - GV%Angstrom)
+      enddo ; enddo
       ! Mass excess that could be removed by adjusting this layer:
       Mlay = Vlay * (GV%Rlay(k) - GV%Rlay(1)) 
 
       if (Mlay .lt. Mex) then
         ! Remove all volume from this layer, add back into layer 1
-        do j=js,je
-          do i=is,ie
-            h(i,j,k) = GV%Angstrom
-            h(i,j,1) = h(i,j,1) + Vlay / G%areaT_global
-           enddo
-        enddo
+        do j=js,je ; do i=is,ie
+           h(i,j,k) = GV%Angstrom
+           h(i,j,1) = h(i,j,1) + Vlay / G%areaT_global
+        enddo ; enddo
         Mex = Mex - Mlay ! Reduce mass excess
 
       else
         ! Remove all excess mass by adjusting this layer:
-        do j=js,je
-          do i=is,ie
-            h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
+        do j=js,je ; do i=is,ie
+           h(i,j,k) = GV%Angstrom + (h(i,j,k) - GV%Angstrom) * &
                 (1.0 - (Mex/Vlay) / ( GV%Rlay(k) - GV%Rlay(1) ))
-            h(i,j,1) = h(i,j,1) + (Mex / G%areaT_global) &
-                         / (GV%Rlay(k) - GV%Rlay(1))
-          enddo
-        enddo
+           h(i,j,1) = h(i,j,1) + (Mex / G%areaT_global) &
+                      / (GV%Rlay(k) - GV%Rlay(1))
+        enddo ; enddo
         Mex = 0.0
         exit       ! All mass excess removed, exit loop
 
