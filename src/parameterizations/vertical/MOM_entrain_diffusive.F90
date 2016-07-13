@@ -261,7 +261,7 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
   real :: Idt        ! The inverse of the time step, in s-1.
   real :: H_to_m, m_to_H  ! Local copies of unit conversion factors.
 
-  real :: zcur, B0, BBLt, efold ! Parameters for setting bottom
+  real :: zc, zt, zb, B0, BBLt, efold ! Parameters for setting bottom
                      ! intensified mixing exponential profile
   
   logical :: do_any
@@ -745,27 +745,37 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
     if (CS%Set_Bflux) then
     ! If Set_Bflux = True then the buoyancy flux is set explicitely
     ! to a bottom intensified exponential profile
+    ! Bf = B0*z/hBBL,          z <= hBBL
+    !    = B0*exp(-(z-hBBL)/d) z >  hBBL
+    ! This formula is averaged (analytically) over each layer.
 
        B0 = CS%sbf_B0 !Flux at top of BBL
        BBLt = CS%sbf_BBL_thickness !BBL thickness
        efold = CS%sbf_decay_scale !e-folding scale
-
+       
        do i=is,ie
-          zcur = 0.0
+          zc = 0.0
           do k=nz,1,-1
-             zcur = zcur + h(i,j,k)/2.0
-             if (zcur .lt. BBLt) then
+             zb = zc
+             zc = zc + h(i,j,k)/2.0
+             zt = zb + h(i,j,k)
+             if (zt .le. BBLt) then
                 F(i,k) = MIN(maxF(i,k),MAX(minF(i,k), &
-                      dt*B0/GV%g_prime(k)*zcur/BBLt))
-             else
+                   dt*B0/GV%g_prime(k)*zc/BBLt))
+             elseif ((zt .gt. BBLt) .and. (zb .lt. BBLt)) then
                 F(i,k) = MIN(maxF(i,k),MAX(minF(i,k), & 
-                      dt*B0/GV%g_prime(k)*EXP(-(zcur-BBLt)/efold)))
+                   dt*B0/GV%g_prime(k)/h(i,j,k)*(     &
+                      0.5*(BBLt - zb*zb/BBLt) +       &
+                      efold*(1.0 - EXP(-(zt-BBLt)/efold)))))
+             else
+                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),  &
+                   dt*B0/GV%g_prime(k)/h(i,j,k)*efold* &
+                   EXP(-(zc-BBLt)/efold)*              &
+                   (EXP(h(i,j,k)/2.0/efold)-EXP(-h(i,j,k)/2.0/efold))))
              endif
-             zcur = zcur + h(i,j,k)/2.0
+             zc = zc + h(i,j,k)/2.0
           enddo
        enddo
-       ! TODO: - Average over layer thickness, rather than assume
-       ! layer is just at center point????
     endif
  
     call F_to_ent(F, h, kb, kmb, j, G, GV, CS, dsp1_ds, eakb, Ent_bl, ea, eb)
