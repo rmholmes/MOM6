@@ -56,7 +56,7 @@ use MOM_variables,           only : thermo_var_ptrs, vertvisc_type, accel_diag_p
 use MOM_variables,           only : cont_diag_ptrs, MOM_thermovar_chksum, p3d
 use MOM_verticalGrid,        only : verticalGrid_type
 use MOM_wave_speed,          only : wave_speeds
-use MOM_coms,                only : num_PEs
+use mpp_mod,                 only : mpp_sum
 use time_manager_mod,        only : increment_time ! for testing itides (BDM)
 
 implicit none ; private
@@ -325,7 +325,7 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
   real :: Idt     ! inverse time step (1/s)
 
   real :: y, dh, y1, y2, vf ! temporary variables for bottom water input
-  real :: Vlay, VlayT, Mex, Vex, Mlay ! and associated surface adjustment
+  real :: Vlay, Mex, Vex, Mlay ! and associated surface adjustment
 
   type(p3d) :: z_ptrs(7)  ! pointers to diagnostics to be interpolated to depth
   integer :: num_z_diags  ! number of diagnostics to be interpolated to depth
@@ -876,10 +876,6 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     ! Note that this currently only works in serial mode, because we
     ! need to know the full layer volume across the whole domain to
     ! adjust it.
-    if (num_PEs() .gt. 1) then 
-       call MOM_error(FATAL, "MOM_diabatic_driver: Surface removal "// &
-         "of bottom water scheme does not work in parallel yet.")
-    endif
 
     Vex = dt * vf            ! Excess volume 
     Mex = Vex * GV%Rlay(nz)  ! Excess mass
@@ -890,6 +886,9 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
       do j=js,je ; do i=is,ie
          Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
       enddo ; enddo
+
+      ! Collate global volume of layer:
+      call mpp_sum(Vlay)
 
       if (Vlay .lt. Vex) then 
          ! Take layer volume to zero
@@ -920,13 +919,15 @@ subroutine diabatic(u, v, h, tv, fluxes, visc, ADp, CDp, dt, G, GV, CS)
     ! avoid possibly dividing by a small number. 
 
     do k=2,nz
-      ! Calculate volume in this layer and top layer:
+      ! Calculate volume in this layer:
       Vlay = 0.0
-      VlayT = 0.0
       do j=js,je ; do i=is,ie
          Vlay = Vlay + G%areaT(i,j) * (h(i,j,k) - GV%Angstrom)
-         VlayT = VlayT + G%areaT(i,j) * (h(i,j,1) - GV%Angstrom)
       enddo ; enddo
+
+      ! Collate global volume of layer:
+      call mpp_sum(Vlay)
+
       ! Mass excess that could be removed by adjusting this layer:
       Mlay = Vlay * (GV%Rlay(k) - GV%Rlay(1)) 
 
