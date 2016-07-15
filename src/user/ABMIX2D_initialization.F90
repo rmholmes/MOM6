@@ -97,6 +97,12 @@ subroutine ABMIX2D_initialize_thickness ( h, G, GV, param_file )
                           ! positive upward, in m.                       !
   integer :: i, j, k, is, ie, js, je, nz
 
+  real    :: botlay_thickness, excess
+
+  call get_param(param_file, mod, "ABMIX2D_INITIAL_BOTTH", botlay_thickness, &
+                 'Thickness of bottom layer above max depth, in ABMIX2D configuration.', &
+                 units='m',default=0.0)
+
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
 
   call MOM_mesg("MOM_initialization.F90, ABMIX2D_initialize_thickness: setting thickness")
@@ -114,6 +120,15 @@ subroutine ABMIX2D_initialize_thickness ( h, G, GV, param_file )
     e0(k) = -G%max_depth * real(k-1) / real(nz)
   enddo
   
+  ! Thicken bottom layer:
+  excess = botlay_thickness - (e0(nz)+G%max_depth)
+  if (excess .gt. 0.0) then
+     e0(nz) = e0(nz) + excess
+     do k=1,nz-1
+        e0(k) = e0(k) * (1.0 - excess / G%max_depth)
+     enddo
+  endif
+
   do j=js,je ; do i=is,ie
      eta1D(nz+1) = -1.0*G%bathyT(i,j)
      do k=nz,1,-1
