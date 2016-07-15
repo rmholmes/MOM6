@@ -96,6 +96,7 @@ type, public :: entrain_diffusive_CS ; private
   logical :: Set_Bflux       ! Parameters for setting the the buoyancy flux
   real    :: sbf_bbl_thickness ! explicitely to a bottom intensified exponential
   real    :: sbf_decay_scale ! profile. 
+  real    :: sbf_taper_scale ! profile. 
   real    :: sbf_B0          ! 
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
@@ -261,8 +262,8 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
   real :: Idt        ! The inverse of the time step, in s-1.
   real :: H_to_m, m_to_H  ! Local copies of unit conversion factors.
 
-  real :: zc, zt, zb, B0, BBLt, efold ! Parameters for setting bottom
-                     ! intensified mixing exponential profile
+  real :: zc, zt, zb, B0, hBBL ! Parameters for setting bottom
+  real :: d, de, r, Hb, zs  ! intensified mixing exponential profile
   
   logical :: do_any
   logical :: do_i(SZI_(G)), did_i(SZI_(G)), reiterate, correct_density
@@ -750,28 +751,38 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
     ! This formula is averaged (analytically) over each layer.
 
        B0 = CS%sbf_B0 !Flux at top of BBL
-       BBLt = CS%sbf_BBL_thickness !BBL thickness
-       efold = CS%sbf_decay_scale !e-folding scale
-       
+       hBBL = CS%sbf_BBL_thickness !BBL thickness
+       d = CS%sbf_decay_scale !e-folding scale
+       r = CS%sbf_taper_scale !basin tapering e-folding scale
+       de = 1.0 / ( 1.0/d + 1.0/r ) !effective decay scale
+
        do i=is,ie
           zc = 0.0
+          Hb = -G%bathyT(i,j)+G%max_depth !Height above basin bottom
           do k=nz,1,-1
              zb = zc
              zc = zc + h(i,j,k)/2.0
              zt = zb + h(i,j,k)
-             if (zt .le. BBLt) then
-                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k), &
-                   dt*B0/GV%g_prime(k)*zc/BBLt))
-             elseif ((zt .gt. BBLt) .and. (zb .lt. BBLt)) then
-                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k), & 
-                   dt*B0/GV%g_prime(k)/h(i,j,k)*(     &
-                      0.5*(BBLt - zb*zb/BBLt) +       &
-                      efold*(1.0 - EXP(-(zt-BBLt)/efold)))))
+             if (zt .le. hBBL) then
+
+                zs = (zc + EXP(-Hb/r)*r/h(i,j,k)*( &
+                     (r+zt)*EXP(-zt/r)-(r+zb)*exp(-zb/r)))/hBBL
+
+                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
+             elseif ((zt .gt. hBBL) .and. (zb .lt. hBBL)) then
+
+                zs = (0.5*(hBBL**2-zb**2) + EXP(-Hb/r)*r*( &
+                     (r+hBBL)*EXP(-hBBL/r)-(r+zb)*EXP(-zb/r)))/hBBL
+                zs = zs - EXP(hBBL/d)*(d*(EXP(-zt/d)-EXP(-hBBL/d)) &
+                     - de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-hBBL/de)))
+                zs = zs/h(i,j,k)
+
+                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
              else
-                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),  &
-                   dt*B0/GV%g_prime(k)/h(i,j,k)*efold* &
-                   EXP(-(zc-BBLt)/efold)*              &
-                   (EXP(h(i,j,k)/2.0/efold)-EXP(-h(i,j,k)/2.0/efold))))
+                zs = - EXP(hBBL/d)*(d*(EXP(-zt/d)-exp(-zb/d)) - &
+                     de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-zb/de)))/h(i,j,k)
+
+                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
              endif
              zc = zc + h(i,j,k)/2.0
           enddo
@@ -2163,10 +2174,12 @@ subroutine entrain_diffusive_init(Time, G, GV, param_file, diag, CS)
   call get_param(param_file, mod, "SBF_DECAY_SCALE", CS%sbf_decay_scale, &
                  "The e-folding decay scale (in m) of the buoyancy flux \n"// &
                  "above the BBL.", units="m", default=500.0)
+  call get_param(param_file, mod, "SBF_TAPER_SCALE", CS%sbf_taper_scale, &
+                 "The e-folding decay scale (in m) of the buoyancy flux \n"// &
+                 "above the basin for basin tapering.", units="m", default=500.0)
   call get_param(param_file, mod, "SBF_B0", CS%sbf_B0, &
                  "The maximum buoyancy flux at the top of the BBL (in m2s-3).", &
                  units="m2s-3", default=1.0E-09)
-  ! TODO: Register F as a diag field to get output?
 
   CS%id_Fb = register_diag_field('ocean_model', 'buoyancy_flux', diag%axesTL, Time, &
       'Buoyancy flux as applied', 'meter2 second-3')
