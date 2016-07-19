@@ -689,6 +689,54 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
     enddo ! end of it loop
 ! This is the end of the section that might be iterated.
 
+    if (CS%Set_Bflux) then
+    ! If Set_Bflux = True then the buoyancy flux is set explicitely
+    ! to a bottom intensified exponential profile
+    ! Bf = B0*z/hBBL,          z <= hBBL
+    !    = B0*exp(-(z-hBBL)/d) z >  hBBL
+    ! This formula is averaged (analytically) over each layer.
+
+       B0 = CS%sbf_B0 !Flux at top of BBL
+       hBBL = CS%sbf_BBL_thickness !BBL thickness
+       d = CS%sbf_decay_scale !e-folding scale
+       r = CS%sbf_taper_scale !basin tapering e-folding scale
+       de = 1.0 / ( 1.0/d + 1.0/r ) !effective decay scale
+
+       do i=is,ie
+          zc = 0.0
+          Hb = -G%bathyT(i,j)+G%max_depth !Height above basin bottom
+          do k=nz,1,-1
+             zb = zc
+             zc = zc + h(i,j,k)/2.0
+             zt = zb + h(i,j,k)
+             minF(i,k) = 0.0
+             if (zt .le. hBBL) then
+                zs = (zc + EXP(-Hb/r)*r/h(i,j,k)*( &
+                     (r+zt)*EXP(-zt/r)-(r+zb)*exp(-zb/r)))/hBBL
+
+             elseif ((zt .gt. hBBL) .and. (zb .lt. hBBL)) then
+                zs = (0.5*(hBBL**2-zb**2) + EXP(-Hb/r)*r*( &
+                     (r+hBBL)*EXP(-hBBL/r)-(r+zb)*EXP(-zb/r)))/hBBL
+                zs = zs - EXP(hBBL/d)*(d*(EXP(-zt/d)-EXP(-hBBL/d)) &
+                     - de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-hBBL/de)))
+                zs = zs/h(i,j,k)
+
+             else
+                zs = - EXP(hBBL/d)*(d*(EXP(-zt/d)-exp(-zb/d)) - &
+                     de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-zb/de)))/h(i,j,k)
+
+             endif
+             F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
+             zc = zc + h(i,j,k)/2.0
+          enddo
+       enddo
+       it = CS%max_ent_it     ! Set iteration number so that check loop
+                              ! below that limits flux to prevent
+                              ! vanishing layers is triggered.
+       do i=is,ie             ! Re-flag values to check
+          do_i(i) = did_i(i)
+       enddo
+    endif ! end of Set_Bflux if statement.
 
     if (it == (CS%max_ent_it)) then
       !   Limit the flux so that the layer below is not depleted.
@@ -742,52 +790,6 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
         endif
       endif ; enddo ; enddo
     endif ! (it == (CS%max_ent_it))
-
-    if (CS%Set_Bflux) then
-    ! If Set_Bflux = True then the buoyancy flux is set explicitely
-    ! to a bottom intensified exponential profile
-    ! Bf = B0*z/hBBL,          z <= hBBL
-    !    = B0*exp(-(z-hBBL)/d) z >  hBBL
-    ! This formula is averaged (analytically) over each layer.
-
-       B0 = CS%sbf_B0 !Flux at top of BBL
-       hBBL = CS%sbf_BBL_thickness !BBL thickness
-       d = CS%sbf_decay_scale !e-folding scale
-       r = CS%sbf_taper_scale !basin tapering e-folding scale
-       de = 1.0 / ( 1.0/d + 1.0/r ) !effective decay scale
-
-       do i=is,ie
-          zc = 0.0
-          Hb = -G%bathyT(i,j)+G%max_depth !Height above basin bottom
-          do k=nz,1,-1
-             zb = zc
-             zc = zc + h(i,j,k)/2.0
-             zt = zb + h(i,j,k)
-             if (zt .le. hBBL) then
-
-                zs = (zc + EXP(-Hb/r)*r/h(i,j,k)*( &
-                     (r+zt)*EXP(-zt/r)-(r+zb)*exp(-zb/r)))/hBBL
-
-                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
-             elseif ((zt .gt. hBBL) .and. (zb .lt. hBBL)) then
-
-                zs = (0.5*(hBBL**2-zb**2) + EXP(-Hb/r)*r*( &
-                     (r+hBBL)*EXP(-hBBL/r)-(r+zb)*EXP(-zb/r)))/hBBL
-                zs = zs - EXP(hBBL/d)*(d*(EXP(-zt/d)-EXP(-hBBL/d)) &
-                     - de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-hBBL/de)))
-                zs = zs/h(i,j,k)
-
-                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
-             else
-                zs = - EXP(hBBL/d)*(d*(EXP(-zt/d)-exp(-zb/d)) - &
-                     de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-zb/de)))/h(i,j,k)
-
-                F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
-             endif
-             zc = zc + h(i,j,k)/2.0
-          enddo
-       enddo
-    endif
  
     call F_to_ent(F, h, kb, kmb, j, G, GV, CS, dsp1_ds, eakb, Ent_bl, ea, eb)
 
