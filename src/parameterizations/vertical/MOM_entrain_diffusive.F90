@@ -98,6 +98,7 @@ type, public :: entrain_diffusive_CS ; private
   real    :: sbf_decay_scale ! profile. 
   real    :: sbf_taper_scale ! profile. 
   real    :: sbf_B0          ! 
+  real    :: sbf_maxy_mix    ! maximum y-value for mixing
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
   integer :: id_Kd = -1, id_diff_work = -1, id_Fb = -1
@@ -263,7 +264,7 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
   real :: H_to_m, m_to_H  ! Local copies of unit conversion factors.
 
   real :: zc, zt, zb, B0, hBBL ! Parameters for setting bottom
-  real :: d, de, r, Hb, zs  ! intensified mixing exponential profile
+  real :: d, de, r, Hb, zs, maxy_mix  ! intensified mixing exponential profile
   
   logical :: do_any
   logical :: do_i(SZI_(G)), did_i(SZI_(G)), reiterate, correct_density
@@ -701,7 +702,10 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
        d = CS%sbf_decay_scale !e-folding scale
        r = CS%sbf_taper_scale !basin tapering e-folding scale
        de = 1.0 / ( 1.0/d + 1.0/r ) !effective decay scale
+       maxy_mix = CS%sbf_maxy_mix
 
+       
+       if ((G%geoLatT(i,j) - G%south_lat)/G%len_lat < maxy_mix) then ! Restrict mixing to < some value
        do i=is,ie
           zc = 0.0
           Hb = -G%bathyT(i,j)+G%max_depth !Height above basin bottom
@@ -736,6 +740,7 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
        do i=is,ie             ! Re-flag values to check
           do_i(i) = did_i(i)
        enddo
+       endif
     endif ! end of Set_Bflux if statement.
 
     if (it == (CS%max_ent_it)) then
@@ -2182,6 +2187,9 @@ subroutine entrain_diffusive_init(Time, G, GV, param_file, diag, CS)
   call get_param(param_file, mod, "SBF_B0", CS%sbf_B0, &
                  "The maximum buoyancy flux at the top of the BBL (in m2s-3).", &
                  units="m2s-3", default=1.0E-09)
+  call get_param(param_file, mod, "SBF_MAXY_MIX", CS%sbf_maxy_mix, &
+                 "The maximum y-point (fractional) to apply mixing\n"// &
+                 ".", units="fraction", default=2.0)
 
   CS%id_Fb = register_diag_field('ocean_model', 'buoyancy_flux', diag%axesTL, Time, &
       'Buoyancy flux as applied', 'meter2 second-3')
