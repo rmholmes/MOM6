@@ -3,7 +3,7 @@ module MOM_MEKE
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-use MOM_checksums,     only : hchksum, uchksum, vchksum
+use MOM_debugging,     only : hchksum, uvchksum
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOCK_ROUTINE
 use MOM_diag_mediator, only : post_data, register_diag_field, safe_alloc_ptr
 use MOM_diag_mediator, only : diag_ctrl, time_type
@@ -115,7 +115,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
     baroHu, &       ! Depth integrated zonal mass flux (m3).
     drag_vel_u      ! A (vertical) viscosity associated with bottom drag at
                     ! u-points, in m s-1.
-  real, dimension(SZIB_(G),SZJB_(G)) :: &
+  real, dimension(SZI_(G),SZJB_(G)) :: &
     MEKE_vflux, &   ! The meridional diffusive flux of MEKE, in kg m2 s-3.
     Kh_v, &         ! The meridional diffusivity that is actually used, in m2 s-1.
     baroHv, &       ! Depth integrated meridional mass flux (m3).
@@ -157,6 +157,8 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
       if (associated(MEKE%mom_src)) call hchksum(MEKE%mom_src, 'MEKE mom_src',G%HI)
       if (associated(MEKE%GM_src)) call hchksum(MEKE%GM_src, 'MEKE GM_src',G%HI)
       if (associated(MEKE%MEKE)) call hchksum(MEKE%MEKE, 'MEKE MEKE',G%HI)
+      call uvchksum("MEKE SN_[uv]", SN_u, SN_v, G%HI)
+      call uvchksum("MEKE h[uv]", hu, hv, G%HI, haloshift=1)
     endif
 
     ! Why are these 3 lines repeated from above?
@@ -213,7 +215,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
 !$OMP do
       do J=js-1,je ; do i=is,ie
         drag_vel_v(i,J) = 0.0
-        if ((G%mask2dCu(i,J) > 0.0) .and. (visc%bbl_thick_v(i,J) > 0.0)) &
+        if ((G%mask2dCv(i,J) > 0.0) .and. (visc%bbl_thick_v(i,J) > 0.0)) &
           drag_vel_v(i,J) = visc%kv_bbl_v(i,J) / visc%bbl_thick_v(i,J)
       enddo ; enddo
 
@@ -236,7 +238,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
     do j=js-1,je+1
       do i=is-1,ie+1 ; mass(i,j) = 0.0 ; enddo
       do k=1,nz ; do i=is-1,ie+1
-        mass(i,j) = mass(i,j) + GV%H_to_kg_m2 * h(i,j,k)
+        mass(i,j) = mass(i,j) + G%mask2dT(i,j) * (GV%H_to_kg_m2 * h(i,j,k))
       enddo ; enddo
       do i=is-1,ie+1
         I_mass(i,j) = 0.0
@@ -252,6 +254,14 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
 
     ! Calculates bottomFac2, barotrFac2 and LmixScale
     call MEKE_lengthScales(CS, MEKE, G, SN_u, SN_v, MEKE%MEKE, bottomFac2, barotrFac2, LmixScale)
+    if (CS%debug) then
+      call uvchksum("MEKE drag_vel_[uv]", drag_vel_u, drag_vel_v, G%HI)
+      call hchksum(mass, 'MEKE mass',G%HI,haloshift=1)
+      call hchksum(drag_rate_visc, 'MEKE drag_rate_visc',G%HI)
+      call hchksum(bottomFac2, 'MEKE bottomFac2',G%HI)
+      call hchksum(barotrFac2, 'MEKE barotrFac2',G%HI)
+      call hchksum(LmixScale, 'MEKE LmixScale',G%HI)
+    endif
 
 !$OMP parallel default(none) shared(MEKE,CS,is,ie,js,je,nz,src,mass,G,h,I_mass, &
 !$OMP                               sdt,drag_vel_u,visc,drag_vel_v,drag_rate_visc, &
@@ -306,7 +316,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
     enddo ; enddo
 !$OMP end parallel
 
-    if (CS%MEKE_KH >= 0.0 .or. CS%MEKE_K4 >= 0.0) then
+    if (CS%MEKE_KH >= 0.0 .or. CS%KhMEKE_FAC > 0.0 .or. CS%MEKE_K4 >= 0.0) then
       ! Update halos for lateral or bi-harmonic diffusion
       call cpu_clock_begin(CS%id_clock_pass)
       call do_group_pass(CS%pass_MEKE, G%Domain)
@@ -387,7 +397,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
 !$OMP                               cdrag2,bottomFac2,MEKE_decay,barotrFac2,  &
 !$OMP                               use_drag_rate,dt,baroHu,baroHv) &
 !$OMP                       private(Kh_here,Inv_Kh_max,ldamping,advFac)
-    if (CS%MEKE_KH >= 0.0 .or. CS%MEKE_advection_factor >0.) then
+    if (CS%MEKE_KH >= 0.0 .or. CS%KhMEKE_FAC > 0.0 .or. CS%MEKE_advection_factor >0.0) then
       ! Lateral diffusion of MEKE
       Kh_here = max(0.,CS%MEKE_Kh)
 !$OMP do
@@ -532,8 +542,18 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, CS, hu, hv)
     if (CS%id_GM_src>0) call post_data(CS%id_GM_src, MEKE%GM_src, CS%diag)
     if (CS%id_mom_src>0) call post_data(CS%id_mom_src, MEKE%mom_src, CS%diag)
     if (CS%id_Le>0) call post_data(CS%id_Le, LmixScale, CS%diag)
-    if (CS%id_gamma_b>0) call post_data(CS%id_gamma_b, sqrt(bottomFac2), CS%diag)
-    if (CS%id_gamma_t>0) call post_data(CS%id_gamma_t, sqrt(barotrFac2), CS%diag)
+    if (CS%id_gamma_b>0) then
+      do j=js,je ; do i=is,ie
+        bottomFac2(i,j) = sqrt(bottomFac2(i,j))
+      enddo ; enddo
+      call post_data(CS%id_gamma_b, bottomFac2, CS%diag)
+    endif
+    if (CS%id_gamma_t>0) then
+      do j=js,je ; do i=is,ie
+        barotrFac2(i,j) = sqrt(barotrFac2(i,j))
+      enddo ; enddo
+      call post_data(CS%id_gamma_t, barotrFac2, CS%diag)
+    endif
 
 ! else ! if MEKE%MEKE
 !   call MOM_error(FATAL, "MOM_MEKE: MEKE%MEKE is not associated!")
@@ -778,14 +798,14 @@ logical function MEKE_init(Time, G, param_file, diag, CS, MEKE, restart_CS)
   logical :: laplacian, useVarMix, coldStart
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  character(len=40)  :: mod = "MOM_MEKE" ! This module's name.
+  character(len=40)  :: mdl = "MOM_MEKE" ! This module's name.
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   ! Determine whether this module will be used
-  call log_version(param_file, mod, version, "")
-  call get_param(param_file, mod, "USE_MEKE", MEKE_init, &
+  call log_version(param_file, mdl, version, "")
+  call get_param(param_file, mdl, "USE_MEKE", MEKE_init, &
                  "If true, turns on the MEKE scheme which calculates\n"// &
                  "a sub-grid mesoscale eddy kinetic energy budget.", &
                  default=.false.)
@@ -806,137 +826,134 @@ logical function MEKE_init(Time, G, param_file, diag, CS, MEKE, restart_CS)
   call MOM_mesg("MEKE_init: reading parameters ", 5)
 
   ! Read all relevant parameters and write them to the model log.
-  call get_param(param_file, mod, "MEKE_DAMPING", CS%MEKE_damping, &
+  call get_param(param_file, mdl, "MEKE_DAMPING", CS%MEKE_damping, &
                  "The local depth-indepented MEKE dissipation rate.", &
                  units="s-1", default=0.0)
-  call get_param(param_file, mod, "MEKE_CD_SCALE", CS%MEKE_Cd_scale, &
+  call get_param(param_file, mdl, "MEKE_CD_SCALE", CS%MEKE_Cd_scale, &
                  "The ratio of the bottom eddy velocity to the column mean\n"//&
                  "eddy velocity, i.e. sqrt(2*MEKE). This should be less than 1\n"//&
                  "to account for the surface intensification of MEKE.", &
                  units="nondim", default=0.)
-  call get_param(param_file, mod, "MEKE_CB", CS%MEKE_Cb, &
+  call get_param(param_file, mdl, "MEKE_CB", CS%MEKE_Cb, &
                  "A coefficient in the expression for the ratio of bottom projected\n"//&
                  "eddy energy and mean column energy (see Jansen et al. 2015).",&
                  units="nondim", default=25.)
-  call get_param(param_file, mod, "MEKE_MIN_GAMMA2", CS%MEKE_min_gamma, &
+  call get_param(param_file, mdl, "MEKE_MIN_GAMMA2", CS%MEKE_min_gamma, &
                  "The minimum allowed value of gamma_b^2.",&
                  units="nondim", default=0.0001)
-  call get_param(param_file, mod, "MEKE_CT", CS%MEKE_Ct, &
+  call get_param(param_file, mdl, "MEKE_CT", CS%MEKE_Ct, &
                  "A coefficient in the expression for the ratio of barotropic\n"//&
                  "eddy energy and mean column energy (see Jansen et al. 2015).",&
                  units="nondim", default=50.)
-  call get_param(param_file, mod, "MEKE_GMCOEFF", CS%MEKE_GMcoeff, &
+  call get_param(param_file, mdl, "MEKE_GMCOEFF", CS%MEKE_GMcoeff, &
                  "The efficiency of the conversion of potential energy \n"//&
                  "into MEKE by the thickness mixing parameterization. \n"//&
                  "If MEKE_GMCOEFF is negative, this conversion is not \n"//&
                  "used or calculated.", units="nondim", default=-1.0)
-  call get_param(param_file, mod, "MEKE_FRCOEFF", CS%MEKE_FrCoeff, &
+  call get_param(param_file, mdl, "MEKE_FRCOEFF", CS%MEKE_FrCoeff, &
                  "The efficiency of the conversion of mean energy into \n"//&
                  "MEKE.  If MEKE_FRCOEFF is negative, this conversion \n"//&
                  "is not used or calculated.", units="nondim", default=-1.0)
-  call get_param(param_file, mod, "MEKE_BGSRC", CS%MEKE_BGsrc, &
+  call get_param(param_file, mdl, "MEKE_BGSRC", CS%MEKE_BGsrc, &
                  "A background energy source for MEKE.", units="W kg-1", &
                  default=0.0)
-  call get_param(param_file, mod, "MEKE_KH", CS%MEKE_Kh, &
+  call get_param(param_file, mdl, "MEKE_KH", CS%MEKE_Kh, &
                  "A background lateral diffusivity of MEKE.\n"//&
                  "Use a negative value to not apply lateral diffusion to MEKE.", &
                  units="m2 s-1", default=-1.0)
-  call get_param(param_file, mod, "MEKE_K4", CS%MEKE_K4, &
+  call get_param(param_file, mdl, "MEKE_K4", CS%MEKE_K4, &
                  "A lateral bi-harmonic diffusivity of MEKE.\n"//&
                  "Use a negative value to not apply bi-harmonic diffusion to MEKE.", &
                  units="m4 s-1", default=-1.0)
-  call get_param(param_file, mod, "MEKE_DTSCALE", CS%MEKE_dtScale, &
+  call get_param(param_file, mdl, "MEKE_DTSCALE", CS%MEKE_dtScale, &
                  "A scaling factor to accelerate the time evolution of MEKE.", &
                  units="nondim", default=1.0)
-  call get_param(param_file, mod, "MEKE_KHCOEFF", CS%MEKE_KhCoeff, &
+  call get_param(param_file, mdl, "MEKE_KHCOEFF", CS%MEKE_KhCoeff, &
                  "A scaling factor in the expression for eddy diffusivity\n"//&
                  "which is otherwise proportional to the MEKE velocity-\n"//&
                  "scale times an eddy mixing-length. This factor\n"//&
                  "must be >0 for MEKE to contribute to the thickness/\n"//&
                  "and tracer diffusivity in the rest of the model.", &
                  units="nondim", default=1.0)
-  call get_param(param_file, mod, "MEKE_USCALE", CS%MEKE_Uscale, &
+  call get_param(param_file, mdl, "MEKE_USCALE", CS%MEKE_Uscale, &
                  "The background velocity that is combined with MEKE to \n"//&
                  "calculate the bottom drag.", units="m s-1", default=0.0)
-  call get_param(param_file, mod, "MEKE_VISC_DRAG", CS%visc_drag, &
+  call get_param(param_file, mdl, "MEKE_VISC_DRAG", CS%visc_drag, &
                  "If true, use the vertvisc_type to calculate the bottom \n"//&
                  "drag acting on MEKE.", default=.true.)
-  call get_param(param_file, mod, "MEKE_KHTH_FAC", MEKE%KhTh_fac, &
+  call get_param(param_file, mdl, "MEKE_KHTH_FAC", MEKE%KhTh_fac, &
                  "A factor that maps MEKE%Kh to KhTh.", units="nondim", &
                  default=0.0)
-  call get_param(param_file, mod, "MEKE_KHTR_FAC", MEKE%KhTr_fac, &
+  call get_param(param_file, mdl, "MEKE_KHTR_FAC", MEKE%KhTr_fac, &
                  "A factor that maps MEKE%Kh to KhTr.", units="nondim", &
                  default=0.0)
-  call get_param(param_file, mod, "MEKE_KHMEKE_FAC", CS%KhMEKE_Fac, &
+  call get_param(param_file, mdl, "MEKE_KHMEKE_FAC", CS%KhMEKE_Fac, &
                  "A factor that maps MEKE%Kh to Kh for MEKE itself.", &
                  units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_OLD_LSCALE", CS%use_old_lscale, &
+  call get_param(param_file, mdl, "MEKE_OLD_LSCALE", CS%use_old_lscale, &
                  "If true, use the old formula for length scale which is\n"//&
                  "a function of grid spacing and deformation radius.",  &
                  default=.false.)
-  call get_param(param_file, mod, "MEKE_RD_MAX_SCALE", CS%Rd_as_max_scale, &
+  call get_param(param_file, mdl, "MEKE_RD_MAX_SCALE", CS%Rd_as_max_scale, &
                  "If true, the length scale used by MEKE is the minimum of\n"//&
                  "the deformation radius or grid-spacing. Only used if\n"//&
                  "MEKE_OLD_LSCALE=True", units="nondim", default=.false.)
-  call get_param(param_file, mod, "MEKE_VISCOSITY_COEFF", CS%viscosity_coeff, &
+  call get_param(param_file, mdl, "MEKE_VISCOSITY_COEFF", CS%viscosity_coeff, &
                  "If non-zero, is the scaling coefficient in the expression for\n"//&
                  "viscosity used to parameterize lateral momentum mixing by\n"//&
                  "unresolved eddies represented by MEKE. Can be negative to\n"//&
                  "represent backscatter from the unresolved eddies.", &
                  units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_FIXED_MIXING_LENGTH", CS%Lfixed, &
+  call get_param(param_file, mdl, "MEKE_FIXED_MIXING_LENGTH", CS%Lfixed, &
                  "If positive, is a fixed length contribution to the expression\n"//&
                  "for mixing length used in MEKE-derived diffusiviity.", &
                  units="m", default=0.0)
-  call get_param(param_file, mod, "MEKE_ALPHA_DEFORM", CS%aDeform, &
+  call get_param(param_file, mdl, "MEKE_ALPHA_DEFORM", CS%aDeform, &
                  "If positive, is a coefficient weighting the deformation scale\n"//&
                  "in the expression for mixing length used in MEKE-derived diffusiviity.", &
                  units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_ALPHA_RHINES", CS%aRhines, &
+  call get_param(param_file, mdl, "MEKE_ALPHA_RHINES", CS%aRhines, &
                  "If positive, is a coefficient weighting the Rhines scale\n"//&
                  "in the expression for mixing length used in MEKE-derived diffusiviity.", &
                  units="nondim", default=0.05)
-  call get_param(param_file, mod, "MEKE_ALPHA_EADY", CS%aEady, &
+  call get_param(param_file, mdl, "MEKE_ALPHA_EADY", CS%aEady, &
                  "If positive, is a coefficient weighting the Eady length scale\n"//&
                  "in the expression for mixing length used in MEKE-derived diffusiviity.", &
                  units="nondim", default=0.05)
-  call get_param(param_file, mod, "MEKE_ALPHA_FRICT", CS%aFrict, &
+  call get_param(param_file, mdl, "MEKE_ALPHA_FRICT", CS%aFrict, &
                  "If positive, is a coefficient weighting the frictional arrest scale\n"//&
                  "in the expression for mixing length used in MEKE-derived diffusiviity.", &
                  units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_ALPHA_GRID", CS%aGrid, &
+  call get_param(param_file, mdl, "MEKE_ALPHA_GRID", CS%aGrid, &
                  "If positive, is a coefficient weighting the grid-spacing as a scale\n"//&
                  "in the expression for mixing length used in MEKE-derived diffusiviity.", &
                  units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_COLD_START", coldStart, &
+  call get_param(param_file, mdl, "MEKE_COLD_START", coldStart, &
                  "If true, initialize EKE to zero. Otherwise a local equilibrium solution\n"//&
                  "is used as an initial condition for EKE.", default=.false.)
-  call get_param(param_file, mod, "MEKE_BACKSCAT_RO_C", MEKE%backscatter_Ro_c, &
+  call get_param(param_file, mdl, "MEKE_BACKSCAT_RO_C", MEKE%backscatter_Ro_c, &
                  "The coefficient in the Rossby number function for scaling the buharmonic\n"//&
                  "frictional energy source. Setting to non-zero enables the Rossby number function.", &
                  units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_BACKSCAT_RO_POW", MEKE%backscatter_Ro_pow, &
+  call get_param(param_file, mdl, "MEKE_BACKSCAT_RO_POW", MEKE%backscatter_Ro_pow, &
                  "The power in the Rossby number function for scaling the biharmomnic\n"//&
                  "frictional energy source.", units="nondim", default=0.0)
-  call get_param(param_file, mod, "MEKE_ADVECTION_FACTOR", CS%MEKE_advection_factor, &
+  call get_param(param_file, mdl, "MEKE_ADVECTION_FACTOR", CS%MEKE_advection_factor, &
                  "A scale factor in front of advection of eddy energy. Zero turns advection off.\n"//&
                  "Using unity would be normal but other values could accomodate a mismatch\n"//&
                  "between the advecting barotropic flow and the vertical structure of MEKE.", &
                  units="nondim", default=0.0)
 
   ! Nonlocal module parameters
-  call get_param(param_file, mod, "CDRAG", CS%cdrag, &
+  call get_param(param_file, mdl, "CDRAG", CS%cdrag, &
                  "CDRAG is the drag coefficient relating the magnitude of \n"//&
                  "the velocity field to the bottom stress.", units="nondim", &
                  default=0.003)
-  call get_param(param_file, mod, "LAPLACIAN", laplacian, default=.false., do_not_log=.true.)
+  call get_param(param_file, mdl, "LAPLACIAN", laplacian, default=.false., do_not_log=.true.)
   if (CS%viscosity_coeff/=0. .and. .not. laplacian) call MOM_error(FATAL, &
                  "LAPLACIAN must be true if MEKE_VISCOSITY_COEFF is true.")
 
-  call get_param(param_file, mod, "USE_VARIABLE_MIXING", useVarMix, default=.false., do_not_log=.true.)
-  if (.not. useVarMix .and. CS%aEady>0.) call MOM_error(FATAL, &
-                 "USE_VARIABLE_MIXING must be true if USE_MEKE is true and MEKE_ALPHA_EADY>0.")
-  call get_param(param_file, mod, "DEBUG", CS%debug, default=.false., do_not_log=.true.)
+  call get_param(param_file, mdl, "DEBUG", CS%debug, default=.false., do_not_log=.true.)
 
   ! Allocation of storage NOT shared with other modules
   if (CS%MEKE_K4>=0.) then
@@ -1174,6 +1191,11 @@ end subroutine MEKE_end
 !! \f[
 !! \gamma_b^2  = \frac{E_b}{E} = \gamma_{d0}
 !!    + \left( 1 + c_{b} \frac{L_d}{L_f} \right)^{-\frac{4}{5}}
+!! ,
+!! \f]
+!! \f[
+!! \gamma_b^2  \leftarrow  \max{\left( \gamma_b^2, \gamma_{min}^2 \right)}
+!! .
 !! \f]
 !!
 !! \subsection section_MEKE_smoothing MEKE smoothing terms
@@ -1187,17 +1209,57 @@ end subroutine MEKE_end
 !! \subsection section_MEKE_diffusivity Diffusivity derived from MEKE
 !!
 !! The predicted eddy velocity scale, \f$ U_e \f$, can be combined with a
-!! mixing length scale to form a diffusivity:
+!! mixing length scale to form a diffusivity.
+!! The primary use of a MEKE derived diffusivity is for use in thickness
+!! diffusion (module mom_thickness_diffuse) and optionally in along
+!! isopycnal mixing of tracers (module mom_tracer_hor_diff).
+!! The original form used (enabled with MEKE_OLD_LSCALE=True):
 !!
-!! \f[  \kappa_M = \gamma_\kappa \sqrt{ \gamma_t U_e^2 A_\Delta } \f]
-!! where \f$ A_\Delta \f$ is the area of the grid cell
-!! and \f$ \gamma_\kappa \in [0,1] \f$ s a non-dimensional factor and,
-!! following Jansen et al., 2015, $\gamma_t^2$ is the ratio of barotropic
-!! eddy energy to column mean eddy energy,
+!! \f[  \kappa_M = \gamma_\kappa \sqrt{ \gamma_t^2 U_e^2 A_\Delta } \f]
+!!
+!! where \f$ A_\Delta \f$ is the area of the grid cell.
+!! Following Jansen et al., 2015, we now use
+!!
+!! \f[  \kappa_M = \gamma_\kappa l_M \sqrt{ \gamma_t^2 U_e^2 } \f]
+!!
+!! where \f$ \gamma_\kappa \in [0,1] \f$ is a non-dimensional factor and,
+!! following Jansen et al., 2015, \f$\gamma_t^2\f$ is the ratio of barotropic
+!! eddy energy to column mean eddy energy given by
 !! \f[
-!! \gamma_t^2  = \frac{E_t}{E} = \left( 1 + c_{t} \frac{L_d}{L_f} \right)^{-\frac{1}{1}}
+!! \gamma_t^2  = \frac{E_t}{E} = \left( 1 + c_{t} \frac{L_d}{L_f} \right)^{-\frac{1}{4}}
+!! ,
+!! \f]
+!! \f[
+!! \gamma_t^2  \leftarrow  \max{\left( \gamma_t^2, \gamma_{min}^2 \right)}
 !! .
 !! \f]
+!!
+!! The length-scale is a configurable combination of multiple length scales:
+!!
+!! \f[
+!! l_M = \left(
+!!       \frac{\alpha_d}{L_d}
+!!     + \frac{\alpha_f}{L_f}
+!!     + \frac{\alpha_R}{L_R}
+!!     + \frac{\alpha_e}{L_e}
+!!     + \frac{\alpha_\Delta}{L_\Delta}
+!!     + \frac{\delta[L_c]}{L_c}
+!!       \right)^{-1}
+!! \f]
+!!
+!! where
+!!
+!! \f{eqnarray*}{
+!! L_d & = & \sqrt{\frac{c_g^2}{f^2+2\beta c_g}} \sim \frac{ c_g }{f} \\\\
+!! L_R & = & \sqrt{\frac{U_e}{\beta}} \\\\
+!! L_e & = & \frac{U_e}{|S| N} \\\\
+!! L_f & = & \frac{H}{c_d} \\\\
+!! L_\Delta & = & \sqrt{A_\Delta} .
+!! \f}
+!!
+!! \f$L_c\f$ is a constant and \f$\delta[L_c]\f$ is the impulse function so that the term
+!! \f$\frac{\delta[L_c]}{L_c}\f$ evaluates to \f$\frac{1}{L_c}\f$ when \f$L_c\f$ is non-zero
+!! but is dropped if \f$L_c=0\f$.
 !!
 !! \subsection section_MEKE_viscosity Viscosity derived from MEKE
 !!
@@ -1220,8 +1282,8 @@ end subroutine MEKE_end
 !!
 !! In the nonlinear drag limit, where \f$ U_e >> \max(U_b, |u|_{z=-D}, C_d^{-1}\lambda) \f$,
 !! the equilibrium becomes
-!! \f$ \overline{E} \approx ( \frac{ \dot{E}_b + \gamma_\eta \dot{E}_\eta +
-!!               \gamma_v \dot{E}_v }{ \sqrt{2} C_d \gamma_b^3 } )^\frac{2}{3} \f$.
+!! \f$ \overline{E} \approx \left( \frac{ \dot{E}_b + \gamma_\eta \dot{E}_\eta +
+!!               \gamma_v \dot{E}_v }{ \sqrt{2} C_d \gamma_b^3 } \right)^\frac{2}{3} \f$.
 !!
 !! \subsubsection section_MEKE_module_parameters MEKE module parameters
 !!
@@ -1234,7 +1296,7 @@ end subroutine MEKE_end
 !! | \f$ \gamma_v \f$      | <code>MEKE_FrCOEFF</code> |
 !! | \f$ \lambda \f$       | <code>MEKE_DAMPING</code> |
 !! | \f$ U_b \f$           | <code>MEKE_USCALE</code> |
-!! | \f$ \gamma_b0 \f$     | <code>MEKE_CD_SCALE</code> |
+!! | \f$ \gamma_{d0} \f$   | <code>MEKE_CD_SCALE</code> |
 !! | \f$ c_{b} \f$         | <code>MEKE_CB</code> |
 !! | \f$ c_{t} \f$         | <code>MEKE_CT</code> |
 !! | \f$ \kappa_E \f$      | <code>MEKE_KH</code> |
@@ -1242,12 +1304,27 @@ end subroutine MEKE_end
 !! | \f$ \gamma_\kappa \f$ | <code>MEKE_KHCOEFF</code> |
 !! | \f$ \gamma_M \f$      | <code>MEKE_KHMEKE_FAC</code> |
 !! | \f$ \gamma_u \f$      | <code>MEKE_VISCOSITY_COEFF</code> |
+!! | \f$ \gamma_{min}^2 \f$| <code>MEKE_MIN_GAMMA2</code> |
+!! | \f$ \alpha_d \f$      | <code>MEKE_ALPHA_DEFORM</code> |
+!! | \f$ \alpha_f \f$      | <code>MEKE_ALPHA_FRICT</code> |
+!! | \f$ \alpha_R \f$      | <code>MEKE_ALPHA_RHINES</code> |
+!! | \f$ \alpha_e \f$      | <code>MEKE_ALPHA_EADY</code> |
+!! | \f$ \alpha_\Delta \f$ | <code>MEKE_ALPHA_GRID</code> |
+!! | \f$ L_c \f$           | <code>MEKE_FIXED_MIXING_LENGTH</code> |
 !! | -                     | <code>MEKE_KHTH_FAC</code> |
 !! | -                     | <code>MEKE_KHTR_FAC</code> |
 !!
 !! | Symbol                | Model parameter |
 !! | ------                | --------------- |
 !! | \f$ C_d \f$           | <code>CDRAG</code> |
+!!
+!! \subsection section_MEKE_references References
+!!
+!! Jansen, M. F., A. J. Adcroft, R. Hallberg, and I. M. Held, 2015: Parameterization of eddy fluxes based on a mesoscale energy
+!! budget. Ocean Modelling, 92, 28--41, http://doi.org/10.1016/j.ocemod.2015.05.007 .
+!!
+!! Marshall, D. P., and A. J. Adcroft, 2010: Parameterization of ocean eddies: Potential vorticity mixing, energetics and Arnold
+!! first stability theorem. Ocean Modelling, 32, 188--204, http://doi.org/10.1016/j.ocemod.2010.02.001 .
 
 end module MOM_MEKE
 

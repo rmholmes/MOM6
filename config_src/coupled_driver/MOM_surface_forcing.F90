@@ -1,48 +1,7 @@
 module MOM_surface_forcing
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
 
-!********+*********+*********+*********+*********+*********+*********+**
-!*                                                                     *
-!*  By Robert Hallberg, May 2004                                       *
-!*  Edited by Stephen Griffies June 2014                               *
-!*                                                                     *
-!*    This program contains the subroutines that transform the surface *
-!*  forcing fields for the coupled model and manage the output of      *
-!*  these fields.                                                      *
-!*                                                                     *
-!*  Macros written all in capital letters are defined in MOM_memory.h. *
-!*                                                                     *
-!*     A small fragment of the grid is shown below:                    *
-!*                                                                     *
-!*    j+1  x ^ x ^ x   At x:  q                                        *
-!*    j+1  > o > o >   At ^:  v, tauy                                  *
-!*    j    x ^ x ^ x   At >:  u, taux                                  *
-!*    j    > o > o >   At o:  h, fluxes.                               *
-!*    j-1  x ^ x ^ x                                                   *
-!*        i-1  i  i+1  At x & ^:                                       *
-!*           i  i+1    At > & o:                                       *
-!*                                                                     *
-!*  The boundaries always run through q grid points (x).               *
-!*                                                                     *
-!********+*********+*********+*********+*********+*********+*********+**
+! This file is part of MOM6. See LICENSE.md for the license.
+
 !### use MOM_controlled_forcing, only : apply_ctrl_forcing, register_ctrl_forcing_restarts
 !### use MOM_controlled_forcing, only : controlled_forcing_init, controlled_forcing_end
 !### use MOM_controlled_forcing, only : ctrl_forcing_CS
@@ -67,12 +26,15 @@ use MOM_restart,          only : restart_init_end, save_restart, restore_state
 use MOM_string_functions, only : uppercase
 use MOM_spatial_means,    only : adjust_area_mean_to_zero
 use MOM_variables,        only : surface
-use user_revise_forcing,  only : user_alter_forcing, user_revise_forcing_init, user_revise_forcing_CS
+use user_revise_forcing,  only : user_alter_forcing, user_revise_forcing_init
+use user_revise_forcing,  only : user_revise_forcing_CS
 
-use coupler_types_mod,        only : coupler_2d_bc_type
-use data_override_mod,        only : data_override_init, data_override
-use fms_mod,                  only : read_data, stdout
-use mpp_mod,                  only : mpp_chksum
+use coupler_types_mod,    only : coupler_2d_bc_type, coupler_type_write_chksums
+use coupler_types_mod,    only : coupler_type_initialized, coupler_type_spawn
+use coupler_types_mod,    only : coupler_type_copy_data
+use data_override_mod,    only : data_override_init, data_override
+use fms_mod,              only : read_data, stdout
+use mpp_mod,              only : mpp_chksum
 use time_interp_external_mod, only : init_external_field, time_interp_external
 use time_interp_external_mod, only : time_interp_external_init
 
@@ -194,6 +156,9 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: fprec                =>NULL() ! mass flux of frozen precip (kg/m2/s)
   real, pointer, dimension(:,:) :: runoff               =>NULL() ! mass flux of liquid runoff (kg/m2/s)
   real, pointer, dimension(:,:) :: calving              =>NULL() ! mass flux of frozen runoff (kg/m2/s)
+  real, pointer, dimension(:,:) :: ustar_berg           =>NULL() ! frictional velocity beneath icebergs (m/s)
+  real, pointer, dimension(:,:) :: area_berg            =>NULL() ! area covered by icebergs(m2/m2)
+  real, pointer, dimension(:,:) :: mass_berg            =>NULL() ! mass of icebergs(kg/m2)
   real, pointer, dimension(:,:) :: runoff_hflx          =>NULL() ! heat content of liquid runoff (W/m2)
   real, pointer, dimension(:,:) :: calving_hflx         =>NULL() ! heat content of frozen runoff (W/m2)
   real, pointer, dimension(:,:) :: p                    =>NULL() ! pressure of overlying ice and atmosphere
@@ -219,7 +184,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, G, CS, state, 
   type(forcing),              intent(inout)         :: fluxes
   integer, dimension(4),      intent(in)            :: index_bounds
   type(time_type),            intent(in)            :: Time
-  type(ocean_grid_type),      intent(inout)         :: G
+  type(ocean_grid_type),      intent(inout)         :: G    !< The ocean's grid structure
   type(surface_forcing_CS),   pointer               :: CS
   type(surface),              intent(in)            :: state
   logical, optional,          intent(in)            :: restore_salt, restore_temp
@@ -333,6 +298,11 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, G, CS, state, 
     call safe_alloc_ptr(fluxes%TKE_tidal,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%ustar_tidal,isd,ied,jsd,jed)
 
+    if (CS%allow_flux_adjustments) then
+      call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
+      call safe_alloc_ptr(fluxes%salt_flux_added,isd,ied,jsd,jed)
+    endif
+
     do j=js-2,je+2 ; do i=is-2,ie+2
       fluxes%TKE_tidal(i,j)   = CS%TKE_tidal(i,j)
       fluxes%ustar_tidal(i,j) = CS%ustar_tidal(i,j)
@@ -347,6 +317,20 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, G, CS, state, 
 
     fluxes%dt_buoy_accum = 0.0
   endif   ! endif for allocation and initialization
+
+  if ((.not.coupler_type_initialized(fluxes%tr_fluxes)) .and. &
+      coupler_type_initialized(IOB%fluxes)) &
+    call coupler_type_spawn(IOB%fluxes, fluxes%tr_fluxes, &
+                            (/is,is,ie,ie/), (/js,js,je,je/))
+  !   It might prove valuable to use the same array extents as the rest of the
+  ! ocean model, rather than using haloless arrays, in which case the last line
+  ! would be: (             (/isd,is,ie,ied/), (/jsd,js,je,jed/))
+
+
+  if (CS%allow_flux_adjustments) then
+   fluxes%heat_added(:,:)=0.0
+   fluxes%salt_flux_added(:,:)=0.0
+  endif
 
   ! allocation and initialization on first call to this routine
   if (CS%area_surf < 0.0) then
@@ -468,6 +452,20 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, G, CS, state, 
 
     if (ASSOCIATED(IOB%calving)) &
       fluxes%frunoff(i,j) = IOB%calving(i-i0,j-j0) * G%mask2dT(i,j)
+
+    if (((ASSOCIATED(IOB%ustar_berg) .and. (.not. ASSOCIATED(fluxes%ustar_berg)))   &
+      .or. (ASSOCIATED(IOB%area_berg) .and. (.not. ASSOCIATED(fluxes%area_berg)))) &
+      .or. (ASSOCIATED(IOB%mass_berg) .and. (.not. ASSOCIATED(fluxes%mass_berg)))) &
+      call allocate_forcing_type(G, fluxes, iceberg=.true.)
+
+    if (ASSOCIATED(IOB%ustar_berg)) &
+      fluxes%ustar_berg(i,j) = IOB%ustar_berg(i-i0,j-j0) * G%mask2dT(i,j)
+
+    if (ASSOCIATED(IOB%area_berg)) &
+      fluxes%area_berg(i,j) = IOB%area_berg(i-i0,j-j0) * G%mask2dT(i,j)
+
+    if (ASSOCIATED(IOB%mass_berg)) &
+      fluxes%mass_berg(i,j) = IOB%mass_berg(i-i0,j-j0) * G%mask2dT(i,j)
 
     if (ASSOCIATED(IOB%runoff_hflx)) &
       fluxes%heat_content_lrunoff(i,j) = IOB%runoff_hflx(i-i0,j-j0) * G%mask2dT(i,j)
@@ -702,10 +700,9 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, G, CS, state, 
     enddo ; enddo
   endif
 
-  !   At a later time, it might prove valuable to translate this array into the
-  ! index space of the ocean model, rather than leaving it in the (haloless)
-  ! arrays that come in from the surface forcing.
-  fluxes%tr_fluxes => IOB%fluxes
+  if (coupler_type_initialized(fluxes%tr_fluxes) .and. &
+      coupler_type_initialized(IOB%fluxes)) &
+    call coupler_type_copy_data(IOB%fluxes, fluxes%tr_fluxes)
 
   if (CS%allow_flux_adjustments) then
     ! Apply adjustments to fluxes
@@ -733,59 +730,52 @@ subroutine apply_flux_adjustments(G, CS, Time, fluxes)
   real, dimension(SZI_(G),SZJ_(G)) :: tempy_at_h ! Delta to meridional wind stress at h points (Pa)
   real, dimension(SZI_(G),SZJ_(G)) :: temp_at_h ! Fluxes at h points (W m-2 or kg m-2 s-1)
 
-  integer :: is_in, ie_in, js_in, je_in, i, j
+  integer :: isc, iec, jsc, jec, i, j
   real :: dLonDx, dLonDy, rDlon, cosA, sinA, zonal_tau, merid_tau
   logical :: overrode_x, overrode_y, overrode_h
 
-  is_in = G%isc - G%isd + 1
-  ie_in = G%iec - G%isd + 1
-  js_in = G%jsc - G%jsd + 1
-  je_in = G%jec - G%jsd + 1
+  isc = G%isc; iec = G%iec
+  jsc = G%jsc; jec = G%jec
 
   overrode_h = .false.
-  call data_override('OCN', 'hflx_adj', temp_at_h, Time, override=overrode_h, &
-                      is_in=is_in, ie_in=ie_in, js_in=js_in, je_in=je_in)
- 
-  if (overrode_h) then 
+  call data_override('OCN', 'hflx_adj', temp_at_h(isc:iec,jsc:jec), Time, override=overrode_h)
+
+  if (overrode_h) then
     do j=G%jsc,G%jec ; do i=G%isc,G%iec
-      fluxes%heat_added(i,j) = fluxes%heat_added(i,j) + temp_at_h(i,j)
+      fluxes%heat_added(i,j) = fluxes%heat_added(i,j) + temp_at_h(i,j)* G%mask2dT(i,j)
     enddo; enddo
   endif
- 
+
   call pass_var(fluxes%heat_added, G%Domain)
- 
+
   overrode_h = .false.
-  call data_override('OCN', 'sflx_adj', temp_at_h, Time, override=overrode_h, &
-                     is_in=is_in, ie_in=ie_in, js_in=js_in, je_in=je_in)
- 
-  if (overrode_h) then 
+  call data_override('OCN', 'sflx_adj', temp_at_h(isc:iec,jsc:jec), Time, override=overrode_h)
+
+  if (overrode_h) then
     do j=G%jsc,G%jec ; do i=G%isc,G%iec
-      fluxes%salt_flux_added(i,j) = fluxes%salt_flux_added(i,j) + temp_at_h(i,j)
+      fluxes%salt_flux_added(i,j) = fluxes%salt_flux_added(i,j) + temp_at_h(i,j)* G%mask2dT(i,j)
     enddo; enddo
   endif
 
   call pass_var(fluxes%salt_flux_added, G%Domain)
   overrode_h = .false.
 
-  call data_override('OCN', 'prcme_adj', temp_at_h, Time, override=overrode_h, &
-                     is_in=is_in, ie_in=ie_in, js_in=js_in, je_in=je_in)
- 
-  if (overrode_h) then 
+  call data_override('OCN', 'prcme_adj', temp_at_h(isc:iec,jsc:jec), Time, override=overrode_h)
+
+  if (overrode_h) then
     do j=G%jsc,G%jec ; do i=G%isc,G%iec
-      fluxes%vprec(i,j) = fluxes%vprec(i,j) + temp_at_h(i,j)
+      fluxes%vprec(i,j) = fluxes%vprec(i,j) + temp_at_h(i,j)* G%mask2dT(i,j)
     enddo; enddo
   endif
- 
+
   call pass_var(fluxes%vprec, G%Domain)
- 
- 
+
+
   tempx_at_h(:,:) = 0.0 ; tempy_at_h(:,:) = 0.0
   ! Either reads data or leaves contents unchanged
   overrode_x = .false. ; overrode_y = .false.
-  call data_override('OCN', 'taux_adj', tempx_at_h, Time, override=overrode_x, &
-                     is_in=is_in, ie_in=ie_in, js_in=js_in, je_in=je_in)
-  call data_override('OCN', 'tauy_adj', tempy_at_h, Time, override=overrode_y, &
-                     is_in=is_in, ie_in=ie_in, js_in=js_in, je_in=je_in)
+  call data_override('OCN', 'taux_adj', tempx_at_h(isc:iec,jsc:jec), Time, override=overrode_x)
+  call data_override('OCN', 'tauy_adj', tempy_at_h(isc:iec,jsc:jec), Time, override=overrode_y)
 
   if (overrode_x .or. overrode_y) then
     if (.not. (overrode_x .and. overrode_y)) call MOM_error(FATAL,"apply_flux_adjustments: "//&
@@ -805,12 +795,12 @@ subroutine apply_flux_adjustments(G, CS, Time, fluxes)
       tempx_at_h(i,j) = cosA * zonal_tau - sinA * merid_tau
       tempy_at_h(i,j) = sinA * zonal_tau + cosA * merid_tau
     enddo ; enddo
-  
+
     ! Average to C-grid locations
     do j=G%jsc,G%jec ; do I=G%isc-1,G%iec
       fluxes%taux(I,j) = fluxes%taux(I,j) + 0.5 * ( tempx_at_h(i,j) + tempx_at_h(i+1,j) )
     enddo ; enddo
-  
+
     do J=G%jsc-1,G%jec ; do i=G%isc,G%iec
       fluxes%tauy(i,J) = fluxes%tauy(i,J) + 0.5 * ( tempy_at_h(i,j) + tempy_at_h(i,j+1) )
     enddo ; enddo
@@ -821,7 +811,7 @@ end subroutine apply_flux_adjustments
 subroutine forcing_save_restart(CS, G, Time, directory, time_stamped, &
                                 filename_suffix)
   type(surface_forcing_CS),   pointer       :: CS
-  type(ocean_grid_type),      intent(inout) :: G
+  type(ocean_grid_type),      intent(inout) :: G    !< The ocean's grid structure
   type(time_type),            intent(in)    :: Time
   character(len=*),           intent(in)    :: directory
   logical,          optional, intent(in)    :: time_stamped
@@ -844,8 +834,8 @@ end subroutine forcing_save_restart
 
 subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, restore_temp)
   type(time_type),          intent(in)    :: Time
-  type(ocean_grid_type),    intent(in)    :: G
-  type(param_file_type),    intent(in)    :: param_file
+  type(ocean_grid_type),    intent(in)    :: G    !< The ocean's grid structure
+  type(param_file_type),    intent(in)    :: param_file !< A structure to parse for run-time parameters
   type(diag_ctrl), target,  intent(inout) :: diag
   type(surface_forcing_CS), pointer       :: CS
   logical, optional,        intent(in)    :: restore_salt, restore_temp
@@ -860,12 +850,12 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
 !                           applied in this model.
   real :: utide  ! The RMS tidal velocity, in m s-1.
   type(directories)  :: dirs
-  logical            :: new_sim
+  logical            :: new_sim, iceberg_flux_diags
   type(time_type)    :: Time_frc
   character(len=200) :: TideAmp_file, gust_file, salt_file, temp_file ! Input file names.
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  character(len=40)  :: mod = "MOM_surface_forcing"  ! This module's name.
+  character(len=40)  :: mdl = "MOM_surface_forcing"  ! This module's name.
   character(len=48)  :: stagger
   character(len=240) :: basin_file
   integer :: i, j, isd, ied, jsd, jed
@@ -886,26 +876,26 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
 
   call write_version_number (version)
   ! Read all relevant parameters and write them to the model log.
-  call log_version(param_file, mod, version, "")
+  call log_version(param_file, mdl, version, "")
 
-  call get_param(param_file, mod, "INPUTDIR", CS%inputdir, &
+  call get_param(param_file, mdl, "INPUTDIR", CS%inputdir, &
                  "The directory in which all input files are found.", &
                  default=".")
   CS%inputdir = slasher(CS%inputdir)
-  call get_param(param_file, mod, "ENABLE_THERMODYNAMICS", CS%use_temperature, &
+  call get_param(param_file, mdl, "ENABLE_THERMODYNAMICS", CS%use_temperature, &
                  "If true, Temperature and salinity are used as state \n"//&
                  "variables.", default=.true.)
-  call get_param(param_file, mod, "RHO_0", CS%Rho0, &
+  call get_param(param_file, mdl, "RHO_0", CS%Rho0, &
                  "The mean ocean density used with BOUSSINESQ true to \n"//&
                  "calculate accelerations and the mass for conservation \n"//&
                  "properties, or with BOUSSINSEQ false to convert some \n"//&
                  "parameters from vertical units of m to kg m-2.", &
                  units="kg m-3", default=1035.0)
-  call get_param(param_file, mod, "LATENT_HEAT_FUSION", CS%latent_heat_fusion, &
+  call get_param(param_file, mdl, "LATENT_HEAT_FUSION", CS%latent_heat_fusion, &
                  "The latent heat of fusion.", units="J/kg", default=hlf)
-  call get_param(param_file, mod, "LATENT_HEAT_VAPORIZATION", CS%latent_heat_vapor, &
+  call get_param(param_file, mdl, "LATENT_HEAT_VAPORIZATION", CS%latent_heat_vapor, &
                  "The latent heat of fusion.", units="J/kg", default=hlv)
-  call get_param(param_file, mod, "MAX_P_SURF", CS%max_p_surf, &
+  call get_param(param_file, mdl, "MAX_P_SURF", CS%max_p_surf, &
                  "The maximum surface pressure that can be exerted by the \n"//&
                  "atmosphere and floating sea-ice or ice shelves. This is \n"//&
                  "needed because the FMS coupling structure does not \n"//&
@@ -913,31 +903,31 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
                  "the ice-ocean heat fluxes are treated explicitly.  No \n"//&
                  "limit is applied if a negative value is used.", units="Pa", &
                  default=-1.0)
-  call get_param(param_file, mod, "ADJUST_NET_SRESTORE_TO_ZERO", &
+  call get_param(param_file, mdl, "ADJUST_NET_SRESTORE_TO_ZERO", &
                  CS%adjust_net_srestore_to_zero, &
                  "If true, adjusts the salinity restoring seen to zero\n"//&
                  "whether restoring is via a salt flux or virtual precip.",&
                  default=restore_salt)
-  call get_param(param_file, mod, "ADJUST_NET_SRESTORE_BY_SCALING", &
+  call get_param(param_file, mdl, "ADJUST_NET_SRESTORE_BY_SCALING", &
                  CS%adjust_net_srestore_by_scaling, &
                  "If true, adjustments to salt restoring to achieve zero net are\n"//&
                  "made by scaling values without moving the zero contour.",&
                  default=.false.)
-  call get_param(param_file, mod, "ADJUST_NET_FRESH_WATER_TO_ZERO", &
+  call get_param(param_file, mdl, "ADJUST_NET_FRESH_WATER_TO_ZERO", &
                  CS%adjust_net_fresh_water_to_zero, &
                  "If true, adjusts the net fresh-water forcing seen \n"//&
                  "by the ocean (including restoring) to zero.", default=.false.)
-  call get_param(param_file, mod, "ADJUST_NET_FRESH_WATER_BY_SCALING", &
+  call get_param(param_file, mdl, "ADJUST_NET_FRESH_WATER_BY_SCALING", &
                  CS%adjust_net_fresh_water_by_scaling, &
                  "If true, adjustments to net fresh water to achieve zero net are\n"//&
                  "made by scaling values without moving the zero contour.",&
                  default=.false.)
-  call get_param(param_file, mod, "ICE_SALT_CONCENTRATION", &
+  call get_param(param_file, mdl, "ICE_SALT_CONCENTRATION", &
                  CS%ice_salt_concentration, &
                  "The assumed sea-ice salinity needed to reverse engineer the \n"//&
                  "melt flux (or ice-ocean fresh-water flux).", &
                  units="kg/kg", default=0.005)
-  call get_param(param_file, mod, "USE_LIMITED_PATM_SSH", CS%use_limited_P_SSH, &
+  call get_param(param_file, mdl, "USE_LIMITED_PATM_SSH", CS%use_limited_P_SSH, &
                  "If true, return the sea surface height with the \n"//&
                  "correction for the atmospheric (and sea-ice) pressure \n"//&
                  "limited by max_p_surf instead of the full atmospheric \n"//&
@@ -945,10 +935,10 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
 
 ! smg: should get_param call should be removed when have A=B code reconciled.
 ! this param is used to distinguish how to diagnose surface heat content from water.
-  call get_param(param_file, mod, "BULKMIXEDLAYER", CS%bulkmixedlayer, &
+  call get_param(param_file, mdl, "BULKMIXEDLAYER", CS%bulkmixedlayer, &
                  default=CS%use_temperature,do_not_log=.true.)
 
-  call get_param(param_file, mod, "WIND_STAGGER", stagger, &
+  call get_param(param_file, mdl, "WIND_STAGGER", stagger, &
                  "A case-insensitive character string to indicate the \n"//&
                  "staggering of the input wind stress field.  Valid \n"//&
                  "values are 'A', 'B', or 'C'.", default="C")
@@ -957,43 +947,43 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
   elseif (uppercase(stagger(1:1)) == 'C') then ; CS%wind_stagger = CGRID_NE
   else ; call MOM_error(FATAL,"surface_forcing_init: WIND_STAGGER = "// &
                         trim(stagger)//" is invalid.") ; endif
-  call get_param(param_file, mod, "WIND_STRESS_MULTIPLIER", CS%wind_stress_multiplier, &
+  call get_param(param_file, mdl, "WIND_STRESS_MULTIPLIER", CS%wind_stress_multiplier, &
                  "A factor multiplying the wind-stress given to the ocean by the\n"//&
                  "coupler. This is used for testing and should be =1.0 for any\n"//&
                  "production runs.", default=1.0)
 
   if (restore_salt) then
-    call get_param(param_file, mod, "FLUXCONST", CS%Flux_const, &
+    call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes \n"//&
                  "to the relative surface anomalies (akin to a piston \n"//&
                  "velocity).  Note the non-MKS units.", units="m day-1", &
                  fail_if_missing=.true.)
-    call get_param(param_file, mod, "SALT_RESTORE_FILE", CS%salt_restore_file, &
+    call get_param(param_file, mdl, "SALT_RESTORE_FILE", CS%salt_restore_file, &
                  "A file in which to find the surface salinity to use for restoring.", &
                  default="salt_restore.nc")
-    call get_param(param_file, mod, "SALT_RESTORE_VARIABLE", CS%salt_restore_var_name, &
+    call get_param(param_file, mdl, "SALT_RESTORE_VARIABLE", CS%salt_restore_var_name, &
                  "The name of the surface salinity variable to read from "//&
                  "SALT_RESTORE_FILE for restoring salinity.", &
                  default="salt")
 ! Convert CS%Flux_const from m day-1 to m s-1.
     CS%Flux_const = CS%Flux_const / 86400.0
 
-    call get_param(param_file, mod, "SRESTORE_AS_SFLUX", CS%salt_restore_as_sflux, &
+    call get_param(param_file, mdl, "SRESTORE_AS_SFLUX", CS%salt_restore_as_sflux, &
                  "If true, the restoring of salinity is applied as a salt \n"//&
                  "flux instead of as a freshwater flux.", default=.false.)
-    call get_param(param_file, mod, "MAX_DELTA_SRESTORE", CS%max_delta_srestore, &
+    call get_param(param_file, mdl, "MAX_DELTA_SRESTORE", CS%max_delta_srestore, &
                  "The maximum salinity difference used in restoring terms.", &
                  units="PSU or g kg-1", default=999.0)
-    call get_param(param_file, mod, "MASK_SRESTORE_UNDER_ICE", &
+    call get_param(param_file, mdl, "MASK_SRESTORE_UNDER_ICE", &
                  CS%mask_srestore_under_ice, &
                  "If true, disables SSS restoring under sea-ice based on a frazil\n"//&
                  "criteria (SST<=Tf). Only used when RESTORE_SALINITY is True.",      &
                  default=.false.)
-    call get_param(param_file, mod, "MASK_SRESTORE_MARGINAL_SEAS", &
+    call get_param(param_file, mdl, "MASK_SRESTORE_MARGINAL_SEAS", &
                  CS%mask_srestore_marginal_seas, &
                  "If true, disable SSS restoring in marginal seas. Only used when\n"//&
                  "RESTORE_SALINITY is True.", default=.false.)
-    call get_param(param_file, mod, "BASIN_FILE", basin_file, &
+    call get_param(param_file, mdl, "BASIN_FILE", basin_file, &
                  "A file in which to find the basin masks, in variable 'basin'.", &
                  default="basin.nc")
     basin_file = trim(CS%inputdir) // trim(basin_file)
@@ -1008,22 +998,22 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
   endif
 
   if (restore_temp) then
-    call get_param(param_file, mod, "FLUXCONST", CS%Flux_const, &
+    call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes \n"//&
                  "to the relative surface anomalies (akin to a piston \n"//&
                  "velocity).  Note the non-MKS units.", units="m day-1", &
                  fail_if_missing=.true.)
-    call get_param(param_file, mod, "SST_RESTORE_FILE", CS%temp_restore_file, &
+    call get_param(param_file, mdl, "SST_RESTORE_FILE", CS%temp_restore_file, &
                  "A file in which to find the surface temperature to use for restoring.", &
                  default="temp_restore.nc")
-    call get_param(param_file, mod, "SST_RESTORE_VARIABLE", CS%temp_restore_var_name, &
+    call get_param(param_file, mdl, "SST_RESTORE_VARIABLE", CS%temp_restore_var_name, &
                  "The name of the surface temperature variable to read from "//&
                  "SST_RESTORE_FILE for restoring sst.", &
                  default="temp")
 ! Convert CS%Flux_const from m day-1 to m s-1.
     CS%Flux_const = CS%Flux_const / 86400.0
 
-    call get_param(param_file, mod, "MAX_DELTA_TRESTORE", CS%max_delta_trestore, &
+    call get_param(param_file, mdl, "MAX_DELTA_TRESTORE", CS%max_delta_trestore, &
                  "The maximum sst difference used in restoring terms.", &
                  units="degC ", default=999.0)
 
@@ -1033,20 +1023,20 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
 ! Otherwise use default tidal amplitude for bottom frictionally-generated
 ! dissipation. Default cd_tides is chosen to yield approx 1 TWatt of
 ! work done against tides globally using OSU tidal amplitude.
-  call get_param(param_file, mod, "CD_TIDES", CS%cd_tides, &
+  call get_param(param_file, mdl, "CD_TIDES", CS%cd_tides, &
                  "The drag coefficient that applies to the tides.", &
                  units="nondim", default=1.0e-4)
-  call get_param(param_file, mod, "READ_TIDEAMP", CS%read_TIDEAMP, &
+  call get_param(param_file, mdl, "READ_TIDEAMP", CS%read_TIDEAMP, &
                  "If true, read a file (given by TIDEAMP_FILE) containing \n"//&
                  "the tidal amplitude with INT_TIDE_DISSIPATION.", default=.false.)
   if (CS%read_TIDEAMP) then
-    call get_param(param_file, mod, "TIDEAMP_FILE", TideAmp_file, &
+    call get_param(param_file, mdl, "TIDEAMP_FILE", TideAmp_file, &
                  "The path to the file containing the spatially varying \n"//&
                  "tidal amplitudes with INT_TIDE_DISSIPATION.", &
                  default="tideamp.nc")
     CS%utide=0.0
   else
-    call get_param(param_file, mod, "UTIDE", CS%utide, &
+    call get_param(param_file, mdl, "UTIDE", CS%utide, &
                  "The constant tidal amplitude used with INT_TIDE_DISSIPATION.", &
                  units="m s-1", default=0.0)
   endif
@@ -1075,14 +1065,14 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
 ! Optionally read a x-y gustiness field in place of a global
 ! constant.
 
-  call get_param(param_file, mod, "READ_GUST_2D", CS%read_gust_2d, &
+  call get_param(param_file, mdl, "READ_GUST_2D", CS%read_gust_2d, &
                  "If true, use a 2-dimensional gustiness supplied from \n"//&
                  "an input file", default=.false.)
-  call get_param(param_file, mod, "GUST_CONST", CS%gust_const, &
+  call get_param(param_file, mdl, "GUST_CONST", CS%gust_const, &
                "The background gustiness in the winds.", units="Pa", &
                default=0.02)
   if (CS%read_gust_2d) then
-    call get_param(param_file, mod, "GUST_2D_FILE", gust_file, &
+    call get_param(param_file, mdl, "GUST_2D_FILE", gust_file, &
                  "The file in which the wind gustiness is found in \n"//&
                  "variable gustiness.")
 
@@ -1093,27 +1083,31 @@ subroutine surface_forcing_init(Time, G, param_file, diag, CS, restore_salt, res
   endif
 
 ! See whether sufficiently thick sea ice should be treated as rigid.
-  call get_param(param_file, mod, "USE_RIGID_SEA_ICE", CS%rigid_sea_ice, &
+  call get_param(param_file, mdl, "USE_RIGID_SEA_ICE", CS%rigid_sea_ice, &
                  "If true, sea-ice is rigid enough to exert a \n"//&
                  "nonhydrostatic pressure that resist vertical motion.", &
                  default=.false.)
   if (CS%rigid_sea_ice) then
-    call get_param(param_file, mod, "SEA_ICE_MEAN_DENSITY", CS%density_sea_ice, &
+    call get_param(param_file, mdl, "SEA_ICE_MEAN_DENSITY", CS%density_sea_ice, &
                  "A typical density of sea ice, used with the kinematic \n"//&
                  "viscosity, when USE_RIGID_SEA_ICE is true.", units="kg m-3", &
                  default=900.0)
-    call get_param(param_file, mod, "SEA_ICE_VISCOSITY", CS%Kv_sea_ice, &
+    call get_param(param_file, mdl, "SEA_ICE_VISCOSITY", CS%Kv_sea_ice, &
                  "The kinematic viscosity of sufficiently thick sea ice \n"//&
                  "for use in calculating the rigidity of sea ice.", &
                  units="m2 s-1", default=1.0e9)
-    call get_param(param_file, mod, "SEA_ICE_RIGID_MASS", CS%rigid_sea_ice_mass, &
+    call get_param(param_file, mdl, "SEA_ICE_RIGID_MASS", CS%rigid_sea_ice_mass, &
                  "The mass of sea-ice per unit area at which the sea-ice \n"//&
                  "starts to exhibit rigidity", units="kg m-2", default=1000.0)
   endif
 
-  call register_forcing_type_diags(Time, diag, CS%use_temperature, CS%handles)
+  call get_param(param_file, mdl, "ALLOW_ICEBERG_FLUX_DIAGNOSTICS", iceberg_flux_diags, &
+                 "If true, makes available diagnostics of fluxes from icebergs\n"//&
+                 "as seen by MOM6.", default=.false.)
+  call register_forcing_type_diags(Time, diag, CS%use_temperature, CS%handles, &
+                                   use_berg_fluxes=iceberg_flux_diags)
 
-  call get_param(param_file, mod, "ALLOW_FLUX_ADJUSTMENTS", CS%allow_flux_adjustments, &
+  call get_param(param_file, mdl, "ALLOW_FLUX_ADJUSTMENTS", CS%allow_flux_adjustments, &
                  "If true, allows flux adjustments to specified via the \n"//&
                  "data_table using the component name 'OCN'.", default=.false.)
   if (CS%allow_flux_adjustments) then
@@ -1197,16 +1191,15 @@ subroutine ice_ocn_bnd_type_chksum(id, timestep, iobt)
     write(outunit,100) 'iobt%runoff         ', mpp_chksum( iobt%runoff         )
     write(outunit,100) 'iobt%calving        ', mpp_chksum( iobt%calving        )
     write(outunit,100) 'iobt%p              ', mpp_chksum( iobt%p              )
-
+    if (ASSOCIATED(iobt%ustar_berg)) &
+      write(outunit,100) 'iobt%ustar_berg     ', mpp_chksum( iobt%ustar_berg     )
+    if (ASSOCIATED(iobt%area_berg)) &
+      write(outunit,100) 'iobt%area_berg      ', mpp_chksum( iobt%area_berg      )
+    if (ASSOCIATED(iobt%mass_berg)) &
+      write(outunit,100) 'iobt%mass_berg      ', mpp_chksum( iobt%mass_berg      )
 100 FORMAT("   CHECKSUM::",A20," = ",Z20)
-    do n = 1, iobt%fluxes%num_bcs  !{
-       do m = 1, iobt%fluxes%bc(n)%num_fields  !{
-          write(outunit,101) 'iobt%',trim(iobt%fluxes%bc(n)%name), &
-               trim(iobt%fluxes%bc(n)%field(m)%name), &
-               mpp_chksum(iobt%fluxes%bc(n)%field(m)%values)
-       enddo  !} m
-    enddo  !} n
-101 FORMAT("   CHECKSUM::",A6,a,'%',a," = ",Z20)
+
+    call coupler_type_write_chksums(iobt%fluxes, outunit, 'iobt%')
 
 end subroutine ice_ocn_bnd_type_chksum
 

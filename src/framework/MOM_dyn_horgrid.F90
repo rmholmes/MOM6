@@ -1,24 +1,6 @@
 module MOM_dyn_horgrid
 
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_hor_index, only : hor_index_type
 use MOM_domains, only : MOM_domain_type
@@ -245,10 +227,12 @@ subroutine create_dyn_horgrid(G, HI, bathymetry_at_vel)
     allocate(G%Dopen_v(isd:ied, JsdB:JedB))  ; G%Dopen_v(:,:) = 0.0
   endif
 
-  allocate(G%gridLonT(isg:ieg))       ; G%gridLonT(:) = 0.0
-  allocate(G%gridLonB(G%IsgB:G%IegB)) ; G%gridLonB(:) = 0.0
-  allocate(G%gridLatT(jsg:jeg))       ; G%gridLatT(:) = 0.0
-  allocate(G%gridLatB(G%JsgB:G%JegB)) ; G%gridLatB(:) = 0.0
+  ! gridLonB and gridLatB are used as edge values in some cases, so they
+  ! always need to use symmetric memory allcoations.
+  allocate(G%gridLonT(isg:ieg))   ; G%gridLonT(:) = 0.0
+  allocate(G%gridLonB(isg-1:ieg)) ; G%gridLonB(:) = 0.0
+  allocate(G%gridLatT(jsg:jeg))   ; G%gridLatT(:) = 0.0
+  allocate(G%gridLatB(jsg-1:jeg)) ; G%gridLatB(:) = 0.0
 
 end subroutine create_dyn_horgrid
 

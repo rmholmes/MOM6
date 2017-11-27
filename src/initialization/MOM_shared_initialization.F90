@@ -4,7 +4,7 @@ module MOM_shared_initialization
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-use MOM_coms, only : max_across_PEs
+use MOM_coms, only : max_across_PEs, reproducing_sum
 use MOM_domains, only : pass_var, pass_vector, sum_across_PEs, broadcast
 use MOM_domains, only : root_PE, To_All, SCALAR_PAIR, CGRID_NE, AGRID
 use MOM_dyn_horgrid, only : dyn_horgrid_type
@@ -37,11 +37,11 @@ subroutine MOM_shared_init_init(PF)
   type(param_file_type),   intent(in)    :: PF   !< A structure indicating the open file
                                                  !! to parse for model parameter values.
 
-  character(len=40)  :: mod = "MOM_shared_initialization" ! This module's name.
+  character(len=40)  :: mdl = "MOM_shared_initialization" ! This module's name.
 
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  call log_version(PF, mod, version, &
+  call log_version(PF, mdl, version, &
    "Sharable code to initialize time-invariant fields, like bathymetry and Coriolis parameters.")
 
 end subroutine MOM_shared_init_init
@@ -57,11 +57,11 @@ subroutine MOM_initialize_rotation(f, G, PF)
 ! This is a separate subroutine so that it can be made public and shared with
 ! the ice-sheet code or other components.
 ! Set up the Coriolis parameter, f, either analytically or from file.
-  character(len=40)  :: mod = "MOM_initialize_rotation" ! This subroutine's name.
+  character(len=40)  :: mdl = "MOM_initialize_rotation" ! This subroutine's name.
   character(len=200) :: config
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
-  call get_param(PF, mod, "ROTATION", config, &
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
+  call get_param(PF, mdl, "ROTATION", config, &
                  "This specifies how the Coriolis parameter is specified: \n"//&
                  " \t 2omegasinlat - Use twice the planetary rotation rate \n"//&
                  " \t\t times the sine of latitude.\n"//&
@@ -76,7 +76,7 @@ subroutine MOM_initialize_rotation(f, G, PF)
     case default ; call MOM_error(FATAL,"MOM_initialize: "// &
       "Unrecognized rotation setup "//trim(config))
   end select
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine MOM_initialize_rotation
 
 !> Calculates the components of grad f (Coriolis parameter)
@@ -89,6 +89,14 @@ subroutine MOM_calculate_grad_Coriolis(dF_dx, dF_dy, G)
   ! Local variables
   integer :: i,j
   real :: f1, f2
+
+  if ((LBOUND(G%CoriolisBu,1) > G%isc-1) .or. &
+      (LBOUND(G%CoriolisBu,2) > G%isc-1)) then
+    ! The gradient of the Coriolis parameter can not be calculated with this grid.
+    dF_dx(:,:) = 0.0 ; dF_dy(:,:) = 0.0
+    return
+  endif
+
   do j=G%jsc, G%jec ; do i=G%isc, G%iec
     f1 = 0.5*( G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1) )
     f2 = 0.5*( G%CoriolisBu(I-1,J) + G%CoriolisBu(I-1,J-1) )
@@ -127,21 +135,21 @@ subroutine initialize_topography_from_file(D, G, param_file)
   ! Local variables
   character(len=200) :: filename, topo_file, inputdir ! Strings for file/path
   character(len=200) :: topo_varname                  ! Variable name in file
-  character(len=40)  :: mod = "initialize_topography_from_file" ! This subroutine's name.
+  character(len=40)  :: mdl = "initialize_topography_from_file" ! This subroutine's name.
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
-  call get_param(param_file, mod, "TOPO_FILE", topo_file, &
+  call get_param(param_file, mdl, "TOPO_FILE", topo_file, &
                  "The file from which the bathymetry is read.", &
                  default="topog.nc")
-  call get_param(param_file, mod, "TOPO_VARNAME", topo_varname, &
+  call get_param(param_file, mdl, "TOPO_VARNAME", topo_varname, &
                  "The name of the bathymetry variable in TOPO_FILE.", &
                  default="depth")
 
   filename = trim(inputdir)//trim(topo_file)
-  call log_param(param_file, mod, "INPUTDIR/TOPO_FILE", filename)
+  call log_param(param_file, mdl, "INPUTDIR/TOPO_FILE", filename)
 
   if (.not.file_exists(filename, G%Domain)) call MOM_error(FATAL, &
        " initialize_topography_from_file: Unable to open "//trim(filename))
@@ -157,7 +165,7 @@ subroutine initialize_topography_from_file(D, G, param_file)
 
   call apply_topography_edits_from_file(D, G, param_file)
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine initialize_topography_from_file
 
 !> Applies a list of topography overrides read from a netcdf file
@@ -169,16 +177,16 @@ subroutine apply_topography_edits_from_file(D, G, param_file)
 
   ! Local variables
   character(len=200) :: topo_edits_file, inputdir ! Strings for file/path
-  character(len=40)  :: mod = "apply_topography_edits_from_file" ! This subroutine's name.
+  character(len=40)  :: mdl = "apply_topography_edits_from_file" ! This subroutine's name.
   integer :: n_edits, n, ashape(5), i, j, ncid, id, ncstatus, iid, jid, zid
   integer, dimension(:), allocatable :: ig, jg
   real, dimension(:), allocatable :: new_depth
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
-  call get_param(param_file, mod, "TOPO_EDITS_FILE", topo_edits_file, &
+  call get_param(param_file, mdl, "TOPO_EDITS_FILE", topo_edits_file, &
                  "The file from which to read a list of i,j,z topography overrides.", &
                  default="")
 
@@ -268,7 +276,7 @@ subroutine apply_topography_edits_from_file(D, G, param_file)
 
   deallocate( ig, jg, new_depth )
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine apply_topography_edits_from_file
 
 !> initialize the bathymetry based on one of several named idealized configurations
@@ -298,38 +306,38 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
   real :: Dedge                ! The depth in m at the basin edge.  !
 ! real :: south_lat, west_lon, len_lon, len_lat, Rad_earth
   integer :: i, j, is, ie, js, je, isd, ied, jsd, jed
-  character(len=40)  :: mod = "initialize_topography_named" ! This subroutine's name.
+  character(len=40)  :: mdl = "initialize_topography_named" ! This subroutine's name.
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
   call MOM_mesg("  MOM_shared_initialization.F90, initialize_topography_named: "//&
                  "TOPO_CONFIG = "//trim(topog_config), 5)
 
-  call get_param(param_file, mod, "MINIMUM_DEPTH", min_depth, &
+  call get_param(param_file, mdl, "MINIMUM_DEPTH", min_depth, &
                  "The minimum depth of the ocean.", units="m", default=0.0)
   if (max_depth<=0.) call MOM_error(FATAL,"initialize_topography_named: "// &
       "MAXIMUM_DEPTH has a non-sensical value! Was it set?")
 
   if (trim(topog_config) /= "flat") then
-    call get_param(param_file, mod, "EDGE_DEPTH", Dedge, &
+    call get_param(param_file, mdl, "EDGE_DEPTH", Dedge, &
                    "The depth at the edge of one of the named topographies.", &
                    units="m", default=100.0)
-!   call get_param(param_file, mod, "SOUTHLAT", south_lat, &
+!   call get_param(param_file, mdl, "SOUTHLAT", south_lat, &
 !                  "The southern latitude of the domain.", units="degrees", &
 !                  fail_if_missing=.true.)
-!   call get_param(param_file, mod, "LENLAT", len_lat, &
+!   call get_param(param_file, mdl, "LENLAT", len_lat, &
 !                  "The latitudinal length of the domain.", units="degrees", &
 !                  fail_if_missing=.true.)
-!   call get_param(param_file, mod, "WESTLON", west_lon, &
+!   call get_param(param_file, mdl, "WESTLON", west_lon, &
 !                  "The western longitude of the domain.", units="degrees", &
 !                  default=0.0)
-!   call get_param(param_file, mod, "LENLON", len_lon, &
+!   call get_param(param_file, mdl, "LENLON", len_lon, &
 !                  "The longitudinal length of the domain.", units="degrees", &
 !                  fail_if_missing=.true.)
-!   call get_param(param_file, mod, "RAD_EARTH", Rad_Earth, &
+!   call get_param(param_file, mdl, "RAD_EARTH", Rad_Earth, &
 !                  "The radius of the Earth.", units="m", default=6.378e6)
-    call get_param(param_file, mod, "TOPOG_SLOPE_SCALE", expdecay, &
+    call get_param(param_file, mdl, "TOPOG_SLOPE_SCALE", expdecay, &
                    "The exponential decay scale used in defining some of \n"//&
                    "the named topographies.", units="m", default=400000.0)
   endif
@@ -382,7 +390,7 @@ subroutine initialize_topography_named(D, G, param_file, topog_config, max_depth
     if (D(i,j) < min_depth) D(i,j) = 0.5*min_depth
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine initialize_topography_named
 ! -----------------------------------------------------------------------------
 
@@ -402,18 +410,18 @@ subroutine limit_topography(D, G, param_file, max_depth)
 
 ! This subroutine ensures that    min_depth < D(x,y) < max_depth
   integer :: i, j
-  character(len=40)  :: mod = "limit_topography" ! This subroutine's name.
+  character(len=40)  :: mdl = "limit_topography" ! This subroutine's name.
   real :: min_depth, mask_depth
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "MINIMUM_DEPTH", min_depth, &
+  call get_param(param_file, mdl, "MINIMUM_DEPTH", min_depth, &
                  "If MASKING_DEPTH is unspecified, then anything shallower than\n"//&
                  "MINIMUM_DEPTH is assumed to be land and all fluxes are masked out.\n"//&
                  "If MASKING_DEPTH is specified, then all depths shallower than\n"//&
                  "MINIMUM_DEPTH but deeper than MASKING_DEPTH are rounded to MINIMUM_DEPTH.", &
                  units="m", default=0.0)
-  call get_param(param_file, mod, "MASKING_DEPTH", mask_depth, &
+  call get_param(param_file, mdl, "MASKING_DEPTH", mask_depth, &
                  "The depth below which to mask the ocean as land.", units="m", &
                  default=-9999.0, do_not_log=.true.)
 
@@ -432,25 +440,25 @@ subroutine limit_topography(D, G, param_file, max_depth)
     enddo ; enddo
   endif
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine limit_topography
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
 subroutine set_rotation_planetary(f, G, param_file)
-  type(dyn_horgrid_type),                        intent(in)  :: G
+  type(dyn_horgrid_type),                       intent(in)  :: G  !< The dynamic horizontal grid
   real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), intent(out) :: f
-  type(param_file_type),                        intent(in)  :: param_file
+  type(param_file_type),                        intent(in)  :: param_file !< A structure to parse for run-time parameters
 ! Arguments: f          - Coriolis parameter (vertical component) in s^-1
 !     (in)   G          - grid type
 !     (in)   param_file - parameter file type
 
 ! This subroutine sets up the Coriolis parameter for a sphere
-  character(len=30) :: mod = "set_rotation_planetary" ! This subroutine's name.
+  character(len=30) :: mdl = "set_rotation_planetary" ! This subroutine's name.
   integer :: I, J
   real    :: PI, omega
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
   call get_param(param_file, "set_rotation_planetary", "OMEGA", omega, &
                  "The rotation rate of the earth.", units="s-1", &
@@ -461,15 +469,15 @@ subroutine set_rotation_planetary(f, G, param_file)
     f(I,J) = ( 2.0 * omega ) * sin( ( PI * G%geoLatBu(I,J) ) / 180.)
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine set_rotation_planetary
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
 subroutine set_rotation_beta_plane(f, G, param_file)
-  type(dyn_horgrid_type),                        intent(in)  :: G
+  type(dyn_horgrid_type),                       intent(in)  :: G  !< The dynamic horizontal grid
   real, dimension(G%IsdB:G%IedB,G%JsdB:G%JedB), intent(out) :: f
-  type(param_file_type),                        intent(in)  :: param_file
+  type(param_file_type),                        intent(in)  :: param_file !< A structure to parse for run-time parameters
 ! Arguments: f          - Coriolis parameter (vertical component) in s^-1
 !     (in)   G          - grid type
 !     (in)   param_file - parameter file type
@@ -477,23 +485,23 @@ subroutine set_rotation_beta_plane(f, G, param_file)
 ! This subroutine sets up the Coriolis parameter for a beta-plane
   integer :: I, J
   real    :: f_0, beta, y_scl, Rad_Earth, PI
-  character(len=40)  :: mod = "set_rotation_beta_plane" ! This subroutine's name.
+  character(len=40)  :: mdl = "set_rotation_beta_plane" ! This subroutine's name.
   character(len=200) :: axis_units
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "F_0", f_0, &
+  call get_param(param_file, mdl, "F_0", f_0, &
                  "The reference value of the Coriolis parameter with the \n"//&
                  "betaplane option.", units="s-1", default=0.0)
-  call get_param(param_file, mod, "BETA", beta, &
+  call get_param(param_file, mdl, "BETA", beta, &
                  "The northward gradient of the Coriolis parameter with \n"//&
                  "the betaplane option.", units="m-1 s-1", default=0.0)
-  call get_param(param_file, mod, "AXIS_UNITS", axis_units, default="degrees")
+  call get_param(param_file, mdl, "AXIS_UNITS", axis_units, default="degrees")
 
   PI = 4.0*atan(1.0)
   select case (axis_units(1:1))
     case ("d")
-      call get_param(param_file, mod, "RAD_EARTH", Rad_Earth, &
+      call get_param(param_file, mdl, "RAD_EARTH", Rad_Earth, &
                    "The radius of the Earth.", units="m", default=6.378e6)
       y_scl = Rad_Earth/PI
     case ("k"); y_scl = 1.E3
@@ -507,13 +515,13 @@ subroutine set_rotation_beta_plane(f, G, param_file)
     f(I,J) = f_0 + beta * ( G%geoLatBu(I,J) * y_scl )
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine set_rotation_beta_plane
 
 !> initialize_grid_rotation_angle initializes the arrays with the sine and
 !!   cosine of the angle between logical north on the grid and true north.
 subroutine initialize_grid_rotation_angle(G, PF)
-  type(dyn_horgrid_type), intent(inout) :: G   !< The model's horizontal grid structure.
+  type(dyn_horgrid_type), intent(inout) :: G   !< The dynamic horizontal grid
   type(param_file_type),  intent(in)    :: PF  !< A structure indicating the open file
                                                !! to parse for model parameter values.
 
@@ -539,9 +547,9 @@ end subroutine initialize_grid_rotation_angle
 
 ! -----------------------------------------------------------------------------
 subroutine reset_face_lengths_named(G, param_file, name)
-  type(dyn_horgrid_type), intent(inout) :: G
-  type(param_file_type), intent(in)    :: param_file
-  character(len=*),      intent(in)    :: name
+  type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
+  type(param_file_type),  intent(in)    :: param_file !< A structure to parse for run-time parameters
+  character(len=*),       intent(in)    :: name
 !   This subroutine sets the open face lengths at selected points to restrict
 ! passages to their observed widths.
 
@@ -575,8 +583,8 @@ subroutine reset_face_lengths_named(G, param_file, name)
       if ((abs(G%geoLatCu(I,j)-12.5) < dy_2) .and. (abs(G%geoLonCu(I,j)-43.0) < dx_2)) &
         G%dy_Cu(I,j) = G%mask2dCu(I,j)*10000.0   ! Red Sea
 
-      if ((abs(G%geoLatCu(i,j)-40.5) < dy_2) .and. (abs(G%geoLonCu(i,j)-26.0) < dx_2)) &
-        G%dy_Cu(i,j) = G%mask2dCu(i,j)*5000.0   ! Dardanelles
+      if ((abs(G%geoLatCu(I,j)-40.5) < dy_2) .and. (abs(G%geoLonCu(I,j)-26.0) < dx_2)) &
+        G%dy_Cu(I,j) = G%mask2dCu(I,j)*5000.0   ! Dardanelles
 
       if ((abs(G%geoLatCu(I,j)-41.5) < dy_2) .and. (abs(G%geoLonCu(I,j)+220.0) < dx_2)) &
         G%dy_Cu(I,j) = G%mask2dCu(I,j)*35000.0   ! Tsugaru strait at 140.0e
@@ -664,15 +672,15 @@ end subroutine reset_face_lengths_named
 
 ! -----------------------------------------------------------------------------
 subroutine reset_face_lengths_file(G, param_file)
-  type(dyn_horgrid_type), intent(inout) :: G
-  type(param_file_type), intent(in)    :: param_file
+  type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
+  type(param_file_type), intent(in)     :: param_file !< A structure to parse for run-time parameters
 !   This subroutine sets the open face lengths at selected points to restrict
 ! passages to their observed widths.
 
 ! Arguments: G - The ocean's grid structure.
 !  (in)      param_file - A structure indicating the open file to parse for
 !                         model parameter values.
-  character(len=40)  :: mod = "reset_face_lengths_file" ! This subroutine's name.
+  character(len=40)  :: mdl = "reset_face_lengths_file" ! This subroutine's name.
   character(len=256) :: mesg    ! Message for error messages.
   character(len=200) :: filename, chan_file, inputdir ! Strings for file/path
   integer :: i, j, isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
@@ -680,15 +688,15 @@ subroutine reset_face_lengths_file(G, param_file)
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   ! These checks apply regardless of the chosen option.
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "CHANNEL_WIDTH_FILE", chan_file, &
+  call get_param(param_file, mdl, "CHANNEL_WIDTH_FILE", chan_file, &
                  "The file from which the list of narrowed channels is read.", &
                  default="ocean_geometry.nc")
-  call get_param(param_file,  mod, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file,  mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
   filename = trim(inputdir)//trim(chan_file)
-  call log_param(param_file, mod, "INPUTDIR/CHANNEL_WIDTH_FILE", filename)
+  call log_param(param_file, mdl, "INPUTDIR/CHANNEL_WIDTH_FILE", filename)
 
   if (is_root_pe()) then ; if (.not.file_exists(filename)) &
     call MOM_error(FATAL," reset_face_lengths_file: Unable to open "//&
@@ -726,14 +734,14 @@ subroutine reset_face_lengths_file(G, param_file)
     if (G%areaCv(i,J) > 0.0) G%IareaCv(i,J) = G%mask2dCv(i,J) / G%areaCv(i,J)
   enddo ; enddo
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine reset_face_lengths_file
 ! -----------------------------------------------------------------------------
 
 ! -----------------------------------------------------------------------------
 subroutine reset_face_lengths_list(G, param_file)
-  type(dyn_horgrid_type), intent(inout) :: G
-  type(param_file_type),  intent(in)    :: param_file
+  type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
+  type(param_file_type),  intent(in)    :: param_file !< A structure to parse for run-time parameters
 !   This subroutine sets the open face lengths at selected points to restrict
 ! passages to their observed widths.
 
@@ -743,7 +751,7 @@ subroutine reset_face_lengths_list(G, param_file)
   character(len=120), pointer, dimension(:) :: lines => NULL()
   character(len=120) :: line
   character(len=200) :: filename, chan_file, inputdir ! Strings for file/path
-  character(len=40)  :: mod = "reset_face_lengths_list" ! This subroutine's name.
+  character(len=40)  :: mdl = "reset_face_lengths_list" ! This subroutine's name.
   real, pointer, dimension(:,:) :: &
     u_lat => NULL(), u_lon => NULL(), v_lat => NULL(), v_lon => NULL()
   real, pointer, dimension(:) :: &
@@ -760,16 +768,16 @@ subroutine reset_face_lengths_list(G, param_file)
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
 
-  call callTree_enter(trim(mod)//"(), MOM_shared_initialization.F90")
+  call callTree_enter(trim(mdl)//"(), MOM_shared_initialization.F90")
 
-  call get_param(param_file, mod, "CHANNEL_LIST_FILE", chan_file, &
+  call get_param(param_file, mdl, "CHANNEL_LIST_FILE", chan_file, &
                  "The file from which the list of narrowed channels is read.", &
                  default="MOM_channel_list")
-  call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   inputdir = slasher(inputdir)
   filename = trim(inputdir)//trim(chan_file)
-  call log_param(param_file, mod, "INPUTDIR/CHANNEL_LIST_FILE", filename)
-  call get_param(param_file, mod, "CHANNEL_LIST_360_LON_CHECK", check_360, &
+  call log_param(param_file, mdl, "INPUTDIR/CHANNEL_LIST_FILE", filename)
+  call get_param(param_file, mdl, "CHANNEL_LIST_360_LON_CHECK", check_360, &
                  "If true, the channel configuration list works for any \n"//&
                  "longitudes in the range of -360 to 360.", default=.true.)
 
@@ -829,11 +837,11 @@ subroutine reset_face_lengths_list(G, param_file)
       found_u = .false.; found_v = .false.
       isu = index(uppercase(line), "U_WIDTH" ); if (isu > 0) found_u = .true.
       isv = index(uppercase(line), "V_WIDTH" ); if (isv > 0) found_v = .true.
-      
+
       ! Store and check the relevant values.
       if (found_u) then
         u_pt = u_pt + 1
-        read(line(isu+8:),*) u_lon(1:2,u_pt), u_lat(1:2,u_pt), u_width(u_pt) 
+        read(line(isu+8:),*) u_lon(1:2,u_pt), u_lat(1:2,u_pt), u_width(u_pt)
         if (is_root_PE()) then
           if (check_360) then
             if ((abs(u_lon(1,u_pt)) > 360.0) .or. (abs(u_lon(2,u_pt)) > 360.0)) &
@@ -887,7 +895,7 @@ subroutine reset_face_lengths_list(G, param_file)
         endif
       endif
     enddo
-    
+
     deallocate(lines)
   endif
 
@@ -901,7 +909,7 @@ subroutine reset_face_lengths_list(G, param_file)
           (((lon >= u_lon(1,npt)) .and. (lon <= u_lon(2,npt))) .or. &
            ((lon_p >= u_lon(1,npt)) .and. (lon_p <= u_lon(2,npt))) .or. &
            ((lon_m >= u_lon(1,npt)) .and. (lon_m <= u_lon(2,npt)))) ) &
-  
+
       G%dy_Cu(I,j) = G%mask2dCu(I,j) * min(G%dyCu(I,j), max(u_width(npt), 0.0))
     enddo
 
@@ -933,7 +941,7 @@ subroutine reset_face_lengths_list(G, param_file)
     deallocate(v_lat) ; deallocate(v_lon) ; deallocate(v_width)
   endif
 
-  call callTree_leave(trim(mod)//'()')
+  call callTree_leave(trim(mdl)//'()')
 end subroutine reset_face_lengths_list
 ! -----------------------------------------------------------------------------
 
@@ -950,7 +958,7 @@ subroutine read_face_length_list(iounit, filename, num_lines, lines)
   logical :: found_u, found_v
   integer :: isu, isv, icom, verbose
   integer :: last
-  
+
   num_lines = 0
 
   if (iounit <= 0) return
@@ -985,7 +993,7 @@ subroutine read_face_length_list(iounit, filename, num_lines, lines)
 
 9 call MOM_error(FATAL, "read_face_length_list : "//&
                   "Error while reading file "//trim(filename))
- 
+
 end subroutine read_face_length_list
 ! -----------------------------------------------------------------------------
 
@@ -1036,19 +1044,21 @@ subroutine compute_global_grid_integrals(G)
   type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid
   ! Subroutine to pre-compute global integrals of grid quantities for
   ! later use in reporting diagnostics
+  real, dimension(G%isc:G%iec, G%jsc:G%jec) :: tmpForSumming
   integer :: i,j
 
+  tmpForSumming(:,:) = 0.
   G%areaT_global = 0.0 ; G%IareaT_global = 0.0
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
-    G%areaT_global = G%areaT_global + ( G%areaT(i,j) * G%mask2dT(i,j) )
+    tmpForSumming(i,j) = G%areaT(i,j) * G%mask2dT(i,j)
   enddo ; enddo
-  call sum_across_PEs( G%areaT_global )
+  G%areaT_global = reproducing_sum(tmpForSumming)
 
   if (G%areaT_global == 0.0) &
     call MOM_error(FATAL, "compute_global_grid_integrals: "//&
                     "zero ocean area (check topography?)")
 
-  G%IareaT_global = 1. / G%areaT_global 
+  G%IareaT_global = 1. / G%areaT_global
 end subroutine compute_global_grid_integrals
 ! -----------------------------------------------------------------------------
 
@@ -1068,7 +1078,7 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
 !                         model parameter values.
 !  (in)      directory - The directory into which to place the file.
   character(len=240) :: filepath
-  character(len=40)  :: mod = "write_ocean_geometry_file"
+  character(len=40)  :: mdl = "write_ocean_geometry_file"
   integer, parameter :: nFlds=23
   type(vardesc) :: vars(nFlds)
   type(fieldtype) :: fields(nFlds)
@@ -1138,7 +1148,7 @@ subroutine write_ocean_geometry_file(G, param_file, directory, geom_file)
   out_v(:,:) = 0.0
   out_q(:,:) = 0.0
 
-  call get_param(param_file, mod, "PARALLEL_RESTARTFILES", multiple_files, &
+  call get_param(param_file, mdl, "PARALLEL_RESTARTFILES", multiple_files, &
                  "If true, each processor writes its own restart file, \n"//&
                  "otherwise a single restart file is generated", &
                  default=.false.)

@@ -1,23 +1,6 @@
 module advection_test_tracer
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+
+! This file is part of MOM6. See LICENSE.md for the license.
 
 !********+*********+*********+*********+*********+*********+*********+**
 !*                                                                     *
@@ -63,16 +46,16 @@ use MOM_grid, only : ocean_grid_type
 use MOM_hor_index, only : hor_index_type
 use MOM_io, only : file_exists, read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary, only : ocean_OBC_type
-use MOM_restart, only : register_restart_field, MOM_restart_CS
+use MOM_restart, only : register_restart_field, query_initialized, MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, sponge_CS
 use MOM_time_manager, only : time_type, get_time
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type
 use MOM_tracer_registry, only : add_tracer_diagnostics, add_tracer_OBC_values
-use MOM_tracer_registry, only : tracer_vertdiff
+use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_variables, only : surface
 use MOM_verticalGrid, only : verticalGrid_type
 
-use coupler_util, only : set_coupler_values, ind_csurf
+use coupler_types_mod, only : coupler_type_set_data, ind_csurf
 use atmos_ocean_fluxes_mod, only : aof_set_coupler_flux
 
 implicit none ; private
@@ -81,16 +64,17 @@ implicit none ; private
 
 public register_advection_test_tracer, initialize_advection_test_tracer
 public advection_test_tracer_surface_state, advection_test_tracer_end
-public advection_test_tracer_column_physics
+public advection_test_tracer_column_physics, advection_test_stock
 
 ! ntr is the number of tracers in this module.
-integer, parameter :: ntr = 11
+integer, parameter :: NTR = 11
 
 type p3d
   real, dimension(:,:,:), pointer :: p => NULL()
 end type p3d
 
 type, public :: advection_test_tracer_CS ; private
+  integer :: ntr = NTR                     ! Number of tracers in this module
   logical :: coupled_tracers = .false.  ! These tracers are not offered to the
                                         ! coupler.
   character(len=200) :: tracer_IC_file ! The full path to the IC file, or " "
@@ -109,6 +93,7 @@ type, public :: advection_test_tracer_CS ; private
   real :: land_val(NTR) = -1.0 ! The value of tr used where land is masked out.
   logical :: mask_tracers  ! If true, tracers are masked out in massless layers.
   logical :: use_sponge
+  logical :: tracers_may_reinit
 
   real :: x_origin, x_width ! Parameters describing the test functions
   real :: y_origin, y_width ! Parameters describing the test functions
@@ -119,6 +104,8 @@ type, public :: advection_test_tracer_CS ; private
 
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
+  type(MOM_restart_CS), pointer :: restart_CSp => NULL()
+
   integer, dimension(NTR) :: id_tracer = -1, id_tr_adx = -1, id_tr_ady = -1
   integer, dimension(NTR) :: id_tr_dfx = -1, id_tr_dfy = -1
 
@@ -129,8 +116,8 @@ contains
 
 function register_advection_test_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   type(hor_index_type),        intent(in) :: HI
-  type(verticalGrid_type),     intent(in) :: GV
-  type(param_file_type),       intent(in) :: param_file
+  type(verticalGrid_type),     intent(in) :: GV   !< The ocean's vertical grid structure
+  type(param_file_type),       intent(in) :: param_file !< A structure to parse for run-time parameters
   type(advection_test_tracer_CS), pointer :: CS
   type(tracer_registry_type),  pointer    :: tr_Reg
   type(MOM_restart_CS),        pointer    :: restart_CS
@@ -148,7 +135,7 @@ function register_advection_test_tracer(HI, GV, param_file, CS, tr_Reg, restart_
   character(len=80)  :: name, longname
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
-  character(len=40)  :: mod = "advection_test_tracer" ! This module's name.
+  character(len=40)  :: mdl = "advection_test_tracer" ! This module's name.
   character(len=200) :: inputdir
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_advection_test_tracer
@@ -163,35 +150,41 @@ function register_advection_test_tracer(HI, GV, param_file, CS, tr_Reg, restart_
   allocate(CS)
 
   ! Read all relevant parameters and write them to the model log.
-  call log_version(param_file, mod, version, "")
+  call log_version(param_file, mdl, version, "")
 
-  call get_param(param_file, mod, "ADVECTION_TEST_X_ORIGIN", CS%x_origin, &
+  call get_param(param_file, mdl, "ADVECTION_TEST_X_ORIGIN", CS%x_origin, &
         "The x-coorindate of the center of the test-functions.\n", default=0.)
-  call get_param(param_file, mod, "ADVECTION_TEST_Y_ORIGIN", CS%y_origin, &
+  call get_param(param_file, mdl, "ADVECTION_TEST_Y_ORIGIN", CS%y_origin, &
         "The y-coorindate of the center of the test-functions.\n", default=0.)
-  call get_param(param_file, mod, "ADVECTION_TEST_X_WIDTH", CS%x_width, &
+  call get_param(param_file, mdl, "ADVECTION_TEST_X_WIDTH", CS%x_width, &
         "The x-width of the test-functions.\n", default=0.)
-  call get_param(param_file, mod, "ADVECTION_TEST_Y_WIDTH", CS%y_width, &
+  call get_param(param_file, mdl, "ADVECTION_TEST_Y_WIDTH", CS%y_width, &
         "The y-width of the test-functions.\n", default=0.)
-  call get_param(param_file, mod, "ADVECTION_TEST_TRACER_IC_FILE", CS%tracer_IC_file, &
+  call get_param(param_file, mdl, "ADVECTION_TEST_TRACER_IC_FILE", CS%tracer_IC_file, &
                  "The name of a file from which to read the initial \n"//&
                  "conditions for the tracers, or blank to initialize \n"//&
                  "them internally.", default=" ")
 
   if (len_trim(CS%tracer_IC_file) >= 1) then
-    call get_param(param_file, mod, "INPUTDIR", inputdir, default=".")
+    call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
     CS%tracer_IC_file = trim(slasher(inputdir))//trim(CS%tracer_IC_file)
-    call log_param(param_file, mod, "INPUTDIR/ADVECTION_TEST_TRACER_IC_FILE", &
+    call log_param(param_file, mdl, "INPUTDIR/ADVECTION_TEST_TRACER_IC_FILE", &
                    CS%tracer_IC_file)
   endif
-  call get_param(param_file, mod, "SPONGE", CS%use_sponge, &
+  call get_param(param_file, mdl, "SPONGE", CS%use_sponge, &
                  "If true, sponges may be applied anywhere in the domain. \n"//&
                  "The exact location and properties of those sponges are \n"//&
                  "specified from MOM_initialization.F90.", default=.false.)
 
-  call get_param(param_file, mod, "MASK_TRACERS_IN_MASSLESS_LAYERS", CS%mask_tracers, &
+  call get_param(param_file, mdl, "MASK_TRACERS_IN_MASSLESS_LAYERS", CS%mask_tracers, &
                  "If true, tracers will be masked out in massless layers. \n", &
                  default=.false.)
+  call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
+                 "If true, tracers may go through the initialization code \n"//&
+                 "if they are not found in the restart files.  Otherwise \n"//&
+                 "it is a fatal error if the tracers are not found in the \n"//&
+                 "restart files of a restarted run.", default=.false.)
+
 
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR)) ; CS%tr(:,:,:,:) = 0.0
   if (CS%mask_tracers) then
@@ -202,13 +195,14 @@ function register_advection_test_tracer(HI, GV, param_file, CS, tr_Reg, restart_
     if (m < 10) then ; write(name,'("tr",I1.1)') m
     else ; write(name,'("tr",I2.2)') m ; endif
     write(longname,'("Concentration of Tracer ",I2.2)') m
-    CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mod)
+    CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
 
     ! This is needed to force the compiler not to do a copy in the registration
     ! calls.  Curses on the designers and implementers of Fortran90.
     tr_ptr => CS%tr(:,:,:,m)
     ! Register the tracer for the restart file.
-    call register_restart_field(tr_ptr, CS%tr_desc(m), .true., restart_CS)
+    call register_restart_field(tr_ptr, CS%tr_desc(m), &
+        .not. CS%tracers_may_reinit, restart_CS)
     ! Register the tracer for horizontal advection & diffusion.
     call register_tracer(tr_ptr, CS%tr_desc(m), param_file, HI, GV, tr_Reg, &
                          tr_desc_ptr=CS%tr_desc(m))
@@ -222,6 +216,7 @@ function register_advection_test_tracer(HI, GV, param_file, CS, tr_Reg, restart_
   enddo
 
   CS%tr_Reg => tr_Reg
+  CS%restart_CSp => restart_CS
   register_advection_test_tracer = .true.
 end function register_advection_test_tracer
 
@@ -229,9 +224,9 @@ subroutine initialize_advection_test_tracer(restart, day, G, GV, h,diag, OBC, CS
                                             sponge_CSp, diag_to_Z_CSp)
   logical,                            intent(in) :: restart
   type(time_type), target,            intent(in) :: day
-  type(ocean_grid_type),              intent(in) :: G
-  type(verticalGrid_type),            intent(in) :: GV
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in) :: h
+  type(ocean_grid_type),              intent(in) :: G    !< The ocean's grid structure
+  type(verticalGrid_type),            intent(in) :: GV   !< The ocean's vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in) :: h    !< Layer thicknesses, in H (usually m or kg m-2)
   type(diag_ctrl), target,            intent(in) :: diag
   type(ocean_OBC_type),               pointer    :: OBC
   type(advection_test_tracer_CS),     pointer    :: CS
@@ -283,9 +278,12 @@ subroutine initialize_advection_test_tracer(restart, day, G, GV, h,diag, OBC, CS
   h_neglect = GV%H_subroundoff
 
   CS%diag => diag
-
-  if (.not.restart) then
-    do m=1,NTR
+  CS%ntr = NTR
+  do m=1,NTR
+    call query_vardesc(CS%tr_desc(m), name=name, &
+                       caller="initialize_advection_test_tracer")
+    if ((.not.restart) .or. (CS%tracers_may_reinit .and. .not. &
+        query_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp))) then
       do k=1,nz ; do j=js,je ; do i=is,ie
         CS%tr(i,j,k,m) = 0.0
       enddo ; enddo ; enddo
@@ -319,8 +317,9 @@ subroutine initialize_advection_test_tracer(restart, day, G, GV, h,diag, OBC, CS
         if (locx**2+locy**2<=1.0) CS%tr(i,j,k,m) = 1.0
         if (locx>0.0.and.abs(locy)<0.2) CS%tr(i,j,k,m) = 0.0
       enddo ; enddo
-    enddo
-  endif ! restart
+    endif ! restart
+  enddo
+
 
   ! This needs to be changed if the units of tracer are changed above.
   if (GV%Boussinesq) then ; flux_units = "kg kg-1 m3 s-1"
@@ -362,13 +361,16 @@ subroutine initialize_advection_test_tracer(restart, day, G, GV, h,diag, OBC, CS
 end subroutine initialize_advection_test_tracer
 
 
-subroutine advection_test_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G, GV, CS)
-  type(ocean_grid_type),                 intent(in) :: G
-  type(verticalGrid_type),               intent(in) :: GV
+subroutine advection_test_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, dt, G, GV, CS, &
+              evap_CFL_limit, minimum_forcing_depth)
+  type(ocean_grid_type),                 intent(in) :: G    !< The ocean's grid structure
+  type(verticalGrid_type),               intent(in) :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in) :: h_old, h_new, ea, eb
   type(forcing),                         intent(in) :: fluxes
-  real,                                  intent(in) :: dt
+  real,                                  intent(in) :: dt   !< The amount of time covered by this call, in s
   type(advection_test_tracer_CS),        pointer    :: CS
+  real,                             optional,intent(in)  :: evap_CFL_limit
+  real,                             optional,intent(in)  :: minimum_forcing_depth
 !   This subroutine applies diapycnal diffusion and any other column
 ! tracer physics or chemistry to the tracers from this file.
 ! This is a simple example of a set of advected passive tracers.
@@ -391,7 +393,7 @@ subroutine advection_test_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, 
 !
 ! The arguments to this subroutine are redundant in that
 !     h_new[k] = h_old[k] + ea[k] - eb[k-1] + eb[k] - ea[k+1]
-
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
   real :: b1(SZI_(G))          ! b1 and c1 are variables used by the
   real :: c1(SZI_(G),SZK_(G))  ! tridiagonal solver.
   integer :: i, j, k, is, ie, js, je, nz, m
@@ -399,9 +401,20 @@ subroutine advection_test_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, 
 
   if (.not.associated(CS)) return
 
-! do m=1,NTR
-!   call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
-! enddo
+  if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
+    do m=1,CS%ntr
+      do k=1,nz ;do j=js,je ; do i=is,ie
+        h_work(i,j,k) = h_old(i,j,k)
+      enddo ; enddo ; enddo;
+      call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
+          evap_CFL_limit, minimum_forcing_depth)
+      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
+    enddo
+  else
+    do m=1,NTR
+      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
+    enddo
+  endif
 
   if (CS%mask_tracers) then
     do m = 1,NTR ; if (CS%id_tracer(m) > 0) then
@@ -434,33 +447,91 @@ subroutine advection_test_tracer_column_physics(h_old, h_new,  ea,  eb, fluxes, 
   enddo
 end subroutine advection_test_tracer_column_physics
 
+!> This subroutine extracts the surface fields from this tracer package that
+!! are to be shared with the atmosphere in coupled configurations.
+!! This particular tracer package does not report anything back to the coupler.
 subroutine advection_test_tracer_surface_state(state, h, G, CS)
-  type(ocean_grid_type),                    intent(in)    :: G
-  type(surface),                            intent(inout) :: state
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in)    :: h
-  type(advection_test_tracer_CS),           pointer       :: CS
-!   This particular tracer package does not report anything back to the coupler.
-! The code that is here is just a rough guide for packages that would.
-! Arguments: state - A structure containing fields that describe the
-!                    surface state of the ocean.
-!  (in)      h - Layer thickness, in m or kg m-2.
-!  (in)      G - The ocean's grid structure.
-!  (in)      CS - The control structure returned by a previous call to
-!                 register_advection_test_tracer.
-  integer :: i, j, m, is, ie, js, je
+  type(ocean_grid_type),  intent(in)    :: G  !< The ocean's grid structure.
+  type(surface),          intent(inout) :: state !< A structure containing fields that
+                                              !! describe the surface state of the ocean.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
+                          intent(in)    :: h  !< Layer thickness, in m or kg m-2.
+  type(advection_test_tracer_CS), pointer :: CS !< The control structure returned by a previous
+                                              !! call to register_advection_test_tracer.
+
+  ! This particular tracer package does not report anything back to the coupler.
+  ! The code that is here is just a rough guide for packages that would.
+
+  integer :: m, is, ie, js, je, isd, ied, jsd, jed
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  
+  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+
   if (.not.associated(CS)) return
 
   if (CS%coupled_tracers) then
-    do m=1,ntr
-      !   This call loads the surface vlues into the appropriate array in the
+    do m=1,CS%ntr
+      !   This call loads the surface values into the appropriate array in the
       ! coupler-type structure.
-      call set_coupler_values(CS%tr(:,:,1,1), state%tr_fields, CS%ind_tr(m), &
-                              ind_csurf, is, ie, js, je)
+      call coupler_type_set_data(CS%tr(:,:,1,m), CS%ind_tr(m), ind_csurf, &
+                   state%tr_fields, idim=(/isd, is, ie, ied/), &
+                   jdim=(/jsd, js, je, jed/) )
     enddo
   endif
+
 end subroutine advection_test_tracer_surface_state
+
+function advection_test_stock(h, stocks, G, GV, CS, names, units, stock_index)
+  type(ocean_grid_type),              intent(in)    :: G    !< The ocean's grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), intent(in)    :: h    !< Layer thicknesses, in H (usually m or kg m-2)
+  real, dimension(:),                 intent(out)   :: stocks
+  type(verticalGrid_type),            intent(in)    :: GV   !< The ocean's vertical grid structure
+  type(advection_test_tracer_CS),     pointer       :: CS
+  character(len=*), dimension(:),     intent(out)   :: names
+  character(len=*), dimension(:),     intent(out)   :: units
+  integer, optional,                  intent(in)    :: stock_index
+  integer                                           :: advection_test_stock
+! This function calculates the mass-weighted integral of all tracer stocks,
+! returning the number of stocks it has calculated.  If the stock_index
+! is present, only the stock corresponding to that coded index is returned.
+
+! Arguments: h - Layer thickness, in m or kg m-2.
+!  (out)     stocks - the mass-weighted integrated amount of each tracer,
+!                     in kg times concentration units.
+!  (in)      G - The ocean's grid structure.
+!  (in)      GV - The ocean's vertical grid structure.
+!  (in)      CS - The control structure returned by a previous call to
+!                 register_ideal_age_tracer.
+!  (out)     names - the names of the stocks calculated.
+!  (out)     units - the units of the stocks calculated.
+!  (in,opt)  stock_index - the coded index of a specific stock being sought.
+! Return value: the number of stocks calculated here.
+
+  integer :: i, j, k, is, ie, js, je, nz, m
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+
+  advection_test_stock = 0
+  if (.not.associated(CS)) return
+  if (CS%ntr < 1) return
+
+  if (present(stock_index)) then ; if (stock_index > 0) then
+    ! Check whether this stock is available from this routine.
+
+    ! No stocks from this routine are being checked yet.  Return 0.
+    return
+  endif ; endif
+
+  do m=1,CS%ntr
+    call query_vardesc(CS%tr_desc(m), name=names(m), units=units(m), caller="advection_test_stock")
+    stocks(m) = 0.0
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      stocks(m) = stocks(m) + CS%tr(i,j,k,m) * &
+                             (G%mask2dT(i,j) * G%areaT(i,j) * h(i,j,k))
+    enddo ; enddo ; enddo
+    stocks(m) = GV%H_to_kg_m2 * stocks(m)
+  enddo
+  advection_test_stock = CS%ntr
+
+end function advection_test_stock
 
 subroutine advection_test_tracer_end(CS)
   type(advection_test_tracer_CS), pointer :: CS

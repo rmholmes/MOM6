@@ -1,23 +1,6 @@
 module MOM_EOS_UNESCO
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+
+! This file is part of MOM6. See LICENSE.md for the license.
 
 !***********************************************************************
 !*  The subroutines in this file implement the equation of state for   *
@@ -29,7 +12,7 @@ module MOM_EOS_UNESCO
 implicit none ; private
 
 public calculate_compress_UNESCO, calculate_density_UNESCO
-public calculate_density_derivs_UNESCO, calculate_2_densities_UNESCO
+public calculate_density_derivs_UNESCO
 public calculate_density_scalar_UNESCO, calculate_density_array_UNESCO
 
 interface calculate_density_UNESCO
@@ -58,9 +41,17 @@ real, parameter ::  S00 = 1.965933e4, S10 = 1.444304e2, S20 = -1.706103, &
 
 contains
 
+!> This subroutine computes the in situ density of sea water (rho in
+!! units of kg/m^3) from salinity (S in psu), potential temperature
+!! (T in deg C), and pressure in Pa.  It uses the expression from
+!! Wright, 1997, J. Atmos. Ocean. Tech., 14, 735-740.
+!! Coded by R. Hallberg, 7/00
 subroutine calculate_density_scalar_UNESCO(T, S, pressure, rho)
-real,    intent(in)  :: T, S, pressure
-real,    intent(out) :: rho
+real,    intent(in)  :: T        !< Potential temperature relative to the surface in C.
+real,    intent(in)  :: S        !< Salinity in PSU.
+real,    intent(in)  :: pressure !< Pressure in Pa.
+real,    intent(out) :: rho      !< In situ density in kg m-3.
+
 ! * Arguments: T - potential temperature relative to the surface in C. *
 ! *  (in)      S - salinity in PSU.                                    *
 ! *  (in)      pressure - pressure in Pa.                              *
@@ -88,10 +79,17 @@ real,    intent(out) :: rho
 
 end subroutine calculate_density_scalar_UNESCO
 
+!> This subroutine computes the in situ density of sea water (rho in
+!! units of kg/m^3) from salinity (S in psu), potential temperature
+!! (T in deg C), and pressure in Pa.
 subroutine calculate_density_array_UNESCO(T, S, pressure, rho, start, npts)
-  real,    intent(in),  dimension(:) :: T, S, pressure
-  real,    intent(out), dimension(:) :: rho
-  integer, intent(in)                :: start, npts
+  real,    intent(in),  dimension(:) :: T        !< Potential temperature relative to the surface
+                                                 !! in C.
+  real,    intent(in),  dimension(:) :: S        !< Salinity in PSU.
+  real,    intent(in),  dimension(:) :: pressure !< Pressure in Pa.
+  real,    intent(out), dimension(:) :: rho      !< In situ density in kg m-3.
+  integer, intent(in)                :: start    !< The starting point in the arrays.
+  integer, intent(in)                :: npts     !< The number of values to calculate.
 
 ! *  This subroutine computes the in situ density of sea water (rho in *
 ! *  units of kg/m^3) from salinity (S in psu), potential temperature  *
@@ -134,10 +132,20 @@ subroutine calculate_density_array_UNESCO(T, S, pressure, rho, start, npts)
   enddo
 end subroutine calculate_density_array_UNESCO
 
+!> This subroutine calculates the partial derivatives of density
+!! with potential temperature and salinity.
 subroutine calculate_density_derivs_UNESCO(T, S, pressure, drho_dT, drho_dS, start, npts)
-  real,    intent(in),  dimension(:) ::  T, S, pressure
-  real,    intent(out), dimension(:) :: drho_dT, drho_dS
-  integer, intent(in)                :: start, npts
+  real,    intent(in),  dimension(:) :: T        !< Potential temperature relative to the surface
+                                                 !! in C.
+  real,    intent(in),  dimension(:) :: S        !< Salinity in PSU.
+  real,    intent(in),  dimension(:) :: pressure !< Pressure in Pa.
+  real,    intent(out), dimension(:) :: drho_dT  !< The partial derivative of density with potential
+                                                 !! temperature, in kg m-3 K-1.
+  real,    intent(out), dimension(:) :: drho_dS  !< The partial derivative of density with salinity,
+                                                 !! in kg m-3 psu-1.
+  integer, intent(in)                :: start    !< The starting point in the arrays.
+  integer, intent(in)                :: npts     !< The number of values to calculate.
+
 ! *   This subroutine calculates the partial derivatives of density    *
 ! * with potential temperature and salinity.                           *
 ! *                                                                    *
@@ -200,10 +208,21 @@ subroutine calculate_density_derivs_UNESCO(T, S, pressure, drho_dT, drho_dS, sta
 
 end subroutine calculate_density_derivs_UNESCO
 
+!> This subroutine computes the in situ density of sea water (rho)
+!! and the compressibility (drho/dp == C_sound^-2) at the given
+!! salinity, potential temperature, and pressure.
 subroutine calculate_compress_UNESCO(T, S, pressure, rho, drho_dp, start, npts)
-  real,    intent(in),  dimension(:) :: T, S, pressure
-  real,    intent(out), dimension(:) :: rho, drho_dp
-  integer, intent(in)                :: start, npts
+  real,    intent(in),  dimension(:) :: T        !< Potential temperature relative to the surface
+                                                 !! in C.
+  real,    intent(in),  dimension(:) :: S        !< Salinity in PSU.
+  real,    intent(in),  dimension(:) :: pressure !< Pressure in Pa.
+  real,    intent(out), dimension(:) :: rho      !< In situ density in kg m-3.
+  real,    intent(out), dimension(:) :: drho_dp  !< The partial derivative of density with pressure
+                                                 !! (also the inverse of the square of sound speed)
+                                                 !! in s2 m-2.
+  integer, intent(in)                :: start    !< The starting point in the arrays.
+  integer, intent(in)                :: npts     !< The number of values to calculate.
+
 ! *  This subroutine computes the in situ density of sea water (rho)   *
 ! *  and the compressibility (drho/dp == C_sound^-2) at the given      *
 ! *  salinity, potential temperature, and pressure.                    *
@@ -255,59 +274,5 @@ subroutine calculate_compress_UNESCO(T, S, pressure, rho, drho_dp, start, npts)
   enddo
 end subroutine calculate_compress_UNESCO
 
-subroutine calculate_2_densities_UNESCO( T, S, pressure1, pressure2, rho1, rho2, start, npts)
-  real,    intent(in),  dimension(:) :: T, S
-  real,    intent(in)                :: pressure1, pressure2
-  real,    intent(out), dimension(:) :: rho1, rho2
-  integer, intent(in)                :: start, npts
-! *  This subroutine computes the densities of sea water (rho1 and     *
-! *  rho2) at two reference pressures (pressure1 and pressure2) from   *
-! *  salinity and potential temperature.                               *
-! *                                                                    *
-! * Arguments: T - potential temperature relative to the surface in C. *
-! *  (in)      S - salinity in PSU.                                    *
-! *  (in)      pressure1 - the first pressure in Pa.                   *
-! *  (in)      pressure2 -  the second pressure in Pa.                 *
-! *  (out)     rho1 - density at pressure1 in kg m-3.                  *
-! *  (out)     rho2 - density at pressure2 in kg m-3.                  *
-! *  (in)      start - the starting point in the arrays.               *
-! *  (in)      npts - the number of values to calculate.               *
-  real :: t_local, t2, t3, t4, t5; ! Temperature to the 1st - 5th power.
-  real :: s_local, s32, s2;     ! Salinity to the 1st, 3/2, & 2nd power.
-  real :: p1a, p2a;   ! Pressure1 (in bars) to the 1st and 2nd power.
-  real :: p1b, p2b;   ! Pressure2 (in bars) to the 1st and 2nd power.
-  real :: rho0;        ! Density at 1 bar pressure, in kg m-3.
-  real :: ksa, ksb;    ! The secant bulk modulus in bar.
-  real :: ks_0, ks_1, ks_2;
-  integer :: j
-
-  p1a = pressure1*1.0e-5; p2a = p1a*p1a;
-  p1b = pressure2*1.0e-5; p2b = p1b*p1b;
-
-  do j=start, start+npts-1
-    t_local = T(j); t2  = t_local*t_local; t3 = t_local*t2; t4 = t2*t2; t5 = t3*t2;
-    s_local = S(j); s2  = s_local*s_local; s32 = s_local*sqrt(s_local);
-
-!  Compute rho(s,theta,p=0) - (same as rho(s,t_insitu,p=0) ).
-
-    rho0 = R00 + R10*t_local + R20*t2 + R30*t3 + R40*t4 + R50*t5 + &
-           s_local*(R01 + R11*t_local + R21*t2 + R31*t3 + R41*t4) + &
-           s32*(R032 + R132*t_local + R232*t2) + R02*s2;
-
-!  Compute rho(s,theta,p), first calculating the secant bulk modulus.
-
-    ks_0 = S00 + S10*t_local + S20*t2 + S30*t3 + S40*t4 + &
-           s_local*(S01 + S11*t_local + S21*t2 + S31*t3) + s32*(S032 + S132*t_local + S232*t2);
-    ks_1 = Sp00 + Sp10*t_local + Sp20*t2 + Sp30*t3 + &
-           s_local*(Sp01 + Sp11*t_local + Sp21*t2) + Sp032*s32;
-    ks_2 = SP000 + SP010*t_local + SP020*t2 + s_local*(SP001 + SP011*t_local + SP021*t2);
-
-    ksa = ks_0 + p1a*ks_1 + p2a*ks_2;
-    ksb = ks_0 + p1b*ks_1 + p2b*ks_2;
-
-    rho1(j) = rho0*ksa / (ksa - p1a);
-    rho2(j) = rho0*ksb / (ksb - p1b);
-  enddo
-end subroutine calculate_2_densities_UNESCO
 
 end module MOM_EOS_UNESCO

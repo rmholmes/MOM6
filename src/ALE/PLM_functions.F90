@@ -1,7 +1,8 @@
 module PLM_functions
+
+! This file is part of MOM6. See LICENSE.md for the license.
+
 !==============================================================================
-!
-! This file is part of MOM.
 !
 ! Date of creation: 2008.06.06
 ! L. White
@@ -47,8 +48,8 @@ subroutine PLM_reconstruction( N, h, u, ppoly_E, ppoly_coefficients )
   integer       :: k                    ! loop index
   real          :: u_l, u_c, u_r        ! left, center and right cell averages
   real          :: h_l, h_c, h_r, h_cn  ! left, center and right cell widths
-  real          :: sigma_l, sigma_c, sigma_r    ! left, center and right 
-                                                ! van Leer slopes   
+  real          :: sigma_l, sigma_c, sigma_r    ! left, center and right
+                                                ! van Leer slopes
   real          :: slope                ! retained PLM slope
   real          :: a, b                 ! auxiliary variables
   real          :: u_min, u_max, e_l, e_r, edge
@@ -60,7 +61,7 @@ subroutine PLM_reconstruction( N, h, u, ppoly_E, ppoly_coefficients )
 
   ! Loop on interior cells
   do k = 2,N-1
-    
+
     ! Get cell averages
     u_l = u(k-1) ; u_c = u(k) ; u_r = u(k+1)
 
@@ -121,7 +122,7 @@ subroutine PLM_reconstruction( N, h, u, ppoly_E, ppoly_coefficients )
     slp(k) = slope
     ppoly_E(k,1) = u_c - 0.5 * slope
     ppoly_E(k,2) = u_c + 0.5 * slope
-        
+
   end do ! end loop on interior cells
 
   ! Boundary cells use PCM. Extrapolation is handled in a later routine.
@@ -213,7 +214,7 @@ subroutine PLM_boundary_extrapolation( N, h, u, ppoly_E, ppoly_coefficients )
 ! Reconstruction by linear polynomials within boundary cells.
 ! The left and right edge values in the left and right boundary cells,
 ! respectively, are estimated using a linear extrapolation within the cells.
-! 
+!
 ! This extrapolation is EXACT when the underlying profile is linear.
 !
 ! N:     number of cells in grid
@@ -256,10 +257,10 @@ subroutine PLM_boundary_extrapolation( N, h, u, ppoly_E, ppoly_coefficients )
 
   ppoly_E(1,1) = u0 - 0.5 * slope
   ppoly_E(1,2) = u0 + 0.5 * slope
-  
+
   ppoly_coefficients(1,1) = ppoly_E(1,1)
   ppoly_coefficients(1,2) = ppoly_E(1,2) - ppoly_E(1,1)
-  
+
   ! ------------------------------------------
   ! Right edge value in the left boundary cell
   ! ------------------------------------------
@@ -268,17 +269,17 @@ subroutine PLM_boundary_extrapolation( N, h, u, ppoly_E, ppoly_coefficients )
 
   u0 = u(N-1)
   u1 = u(N)
-  
+
   ! The h2 scheme is used to compute the right edge value
   ppoly_E(N,1) = (u0*h1 + u1*h0) / (h0 + h1)
 
   ! The standard PLM slope is computed as a first estimate for the
   ! reconstruction within the cell
   slope = 2.0 * ( u1 - ppoly_E(N,1) )
-  
+
   ppoly_E(N,1) = u1 - 0.5 * slope
   ppoly_E(N,2) = u1 + 0.5 * slope
-  
+
   ppoly_coefficients(N,1) = ppoly_E(N,1)
   ppoly_coefficients(N,2) = ppoly_E(N,2) - ppoly_E(N,1)
 

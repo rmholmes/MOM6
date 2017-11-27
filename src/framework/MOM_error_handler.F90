@@ -1,7 +1,8 @@
 module MOM_error_handler
+
+! This file is part of MOM6. See LICENSE.md for the license.
+
 !********+*********+*********+*********+*********+*********+*********+**
-!*                                                                     *
-!*    This file is a part of MOM.  See MOM.F90 for licensing.          *
 !*                                                                     *
 !*  By R. Hallberg, 2005-2012.                                         *
 !*                                                                     *
@@ -18,6 +19,7 @@ implicit none ; private
 public MOM_error, MOM_mesg, NOTE, WARNING, FATAL, is_root_pe, stdlog, stdout
 public MOM_set_verbosity, MOM_get_verbosity, MOM_verbose_enough
 public callTree_showQuery, callTree_enter, callTree_leave, callTree_waypoint
+public assert
 
 ! Verbosity level:
 !  0 - FATAL messages only
@@ -171,5 +173,16 @@ subroutine callTree_waypoint(mesg,n)
     endif
   endif
 end subroutine callTree_waypoint
+
+!> Issues a FATAL error if the assertion fails, i.e. the first argument is false.
+subroutine assert(logical_arg, msg)
+  logical, intent(in) :: logical_arg !< If false causes a FATAL error
+  character(len=*), intent(in) :: msg !< Message to issue in case of failed assertion
+
+  if (.not. logical_arg) then
+    call MOM_error(FATAL, msg)
+  endif
+
+end subroutine assert
 
 end module MOM_error_handler

@@ -1,23 +1,6 @@
 module sloshing_initialization
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM.                                         *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+
+! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_domains, only : sum_across_PEs
 use MOM_dyn_horgrid, only : dyn_horgrid_type
@@ -43,9 +26,9 @@ implicit none ; private
 ! -----------------------------------------------------------------------------
 public sloshing_initialize_topography
 public sloshing_initialize_thickness
-public sloshing_initialize_temperature_salinity 
+public sloshing_initialize_temperature_salinity
 
-character(len=40)  :: mod = "sloshing_initialization" ! This module's name.
+character(len=40)  :: mdl = "sloshing_initialization" ! This module's name.
 
 ! -----------------------------------------------------------------------------
 ! This module contains the following routines
@@ -59,13 +42,13 @@ subroutine sloshing_initialize_topography ( D, G, param_file, max_depth )
                                       intent(out) :: D !< Ocean bottom depth in m
   type(param_file_type),              intent(in)  :: param_file !< Parameter file structure
   real,                               intent(in)  :: max_depth  !< Maximum depth of model in m
-  
-  ! Local variables 
+
+  ! Local variables
   integer   :: i, j
-  
-  do i=G%isc,G%iec 
-    do j=G%jsc,G%jec 
-    
+
+  do i=G%isc,G%iec
+    do j=G%jsc,G%jec
+
       D(i,j) = max_depth
 
     enddo
@@ -82,16 +65,17 @@ end subroutine sloshing_initialize_topography
 !! same thickness but all interfaces (except bottom and sea surface) are
 !! displaced according to a half-period cosine, with maximum value on the
 !! left and minimum value on the right. This sets off a regular sloshing motion.
-subroutine sloshing_initialize_thickness ( h, G, GV, param_file )
-  type(ocean_grid_type), intent(in)           :: G          !< The ocean's grid structure.
-  type(verticalGrid_type), intent(in)         :: GV         !< The ocean's vertical grid structure.
-  real, intent(out), dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h !< The thicknesses being
-                                                            !! initialized.
-  type(param_file_type), intent(in)           :: param_file !< A structure indicating the
-                                                            !! open file to parse for model
-                                                            !! parameter values.
+subroutine sloshing_initialize_thickness ( h, G, GV, param_file, just_read_params)
+  type(ocean_grid_type),   intent(in)  :: G           !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in)  :: GV          !< The ocean's vertical grid structure.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(out) :: h           !< The thickness that is being initialized, in m.
+  type(param_file_type),   intent(in)  :: param_file  !< A structure indicating the open file
+                                                      !! to parse for model parameter values.
+  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
+                                                      !! only read parameters without changing h.
 
-  real    :: displ(SZK_(G)+1)  
+  real    :: displ(SZK_(G)+1)
   real    :: z_unif(SZK_(G)+1)
   real    :: z_inter(SZK_(G)+1)
   real    :: x
@@ -101,17 +85,22 @@ subroutine sloshing_initialize_thickness ( h, G, GV, param_file )
   real    :: weight_z
   real    :: x1, y1, x2, y2
   real    :: t
+  logical :: just_read    ! If true, just read parameters but set nothing.
   integer :: n
-  
+
   integer :: i, j, k, is, ie, js, je, nx, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
-  
+
+  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
+
+  if (just_read) return ! This subroutine has no run-time parameters.
+
   deltah = G%max_depth / nz
 
   ! Define thicknesses
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
-  
+
     ! Define uniform interfaces
     do k = 0,nz
       z_unif(k+1) = -real(k)/real(nz)
@@ -120,71 +109,71 @@ subroutine sloshing_initialize_thickness ( h, G, GV, param_file )
     ! 1. Define stratification
     n = 3
     do k = 1,nz+1
-      
+
       ! Thin pycnocline in the middle
       !z_inter(k) = (2.0**(n-1)) * (z_unif(k) + 0.5)**n - 0.5
 
       ! Thin pycnocline in the middle (piecewise linear profile)
       x1 = 0.30; y1 = 0.48; x2 = 0.70; y2 = 0.52
-    
+
       x = -z_unif(k)
-      
+
       if ( x .le. x1 ) then
-        t = y1*x/x1;    
+        t = y1*x/x1;
       else if ( (x .gt. x1 ) .and. ( x .lt. x2 )) then
         t = y1 + (y2-y1) * (x-x1) / (x2-x1)
-      else  
+      else
         t = y2 + (1.0-y2) * (x-x2) / (1.0-x2)
       end if
-      
+
       t = - z_unif(k)
 
       z_inter(k) = -t * G%max_depth
-      
+
     end do
-    
+
     ! 2. Define displacement
     a0 = 75.0;      ! Displacement amplitude (meters)
     do k = 1,nz+1
-      
+
       weight_z = - 4.0 * ( z_unif(k) + 0.5 )**2 + 1
-      
+
       x = G%geoLonT(i,j) / G%len_lon
-      displ(k) = a0 * cos(acos(-1.0)*x) + weight_z; 
-      
+      displ(k) = a0 * cos(acos(-1.0)*x) + weight_z;
+
       if ( k .EQ. 1 ) then
         displ(k) = 0.0
       end if
-      
+
       if ( k .EQ. nz+1 ) then
         displ(k) = 0.0
       end if
-      
+
       z_inter(k) = z_inter(k) + displ(k)
-      
+
     end do
-    
+
     ! 3. The last interface must coincide with the seabed
     z_inter(nz+1) = -G%bathyT(i,j)
 
-    ! Modify interface heights to make sure all thicknesses 
+    ! Modify interface heights to make sure all thicknesses
     ! are strictly positive
     do k = nz,1,-1
-      
+
       if ( z_inter(k) .LT. (z_inter(k+1) + GV%Angstrom) ) then
         z_inter(k) = z_inter(k+1) + GV%Angstrom
       end if
-      
+
     end do
-    
+
     ! 4. Define layers
     total_height = 0.0
     do k = 1,nz
       h(i,j,k) = z_inter(k) - z_inter(k+1)
-      
+
       total_height = total_height + h(i,j,k)
     end do
- 
+
   enddo ; enddo
 
 end subroutine sloshing_initialize_thickness
@@ -198,7 +187,7 @@ end subroutine sloshing_initialize_thickness
 !! Note that the linear distribution is set up with respect to the layer
 !! number, not the physical position).
 subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, param_file, &
-                                                      eqn_of_state)
+                                                      eqn_of_state, just_read_params)
   type(ocean_grid_type),                     intent(in)  :: G !< Ocean grid structure.
   real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(out) :: T !< Potential temperature (degC).
   real, dimension(SZI_(G),SZJ_(G), SZK_(G)), intent(out) :: S !< Salinity (ppt).
@@ -207,7 +196,9 @@ subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, param_file, &
                                                             !! open file to parse for model
                                                             !! parameter values.
   type(EOS_type),                            pointer     :: eqn_of_state !< Equation of state structure.
-                                                      
+  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
+                                                      !! only read parameters without changing h.
+
   integer :: i, j, k, is, ie, js, je, nz
   real    :: delta_S, delta_T
   real    :: S_ref, T_ref;      ! Reference salinity and temerature within
@@ -217,27 +208,37 @@ subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, param_file, &
   integer :: kdelta
   real    :: deltah
   real    :: xi0, xi1
-  character(len=40)  :: mod = "initialize_temp_salt_linear" ! This subroutine's 
+  logical :: just_read    ! If true, just read parameters but set nothing.
+  character(len=40)  :: mdl = "initialize_temp_salt_linear" ! This subroutine's
                                                             ! name.
-  
+
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
-  call get_param(param_file,mod,"S_REF",S_ref,'Reference value for salinity',units='1e-3',fail_if_missing=.true.)
-  call get_param(param_file,mod,"T_REF",T_ref,'Refernce value for temperature',units='C',fail_if_missing=.true.)
-  
+
+  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
+
+  call get_param(param_file, mdl,"S_REF",S_ref,'Reference value for salinity', &
+                 units='1e-3', fail_if_missing=.not.just_read, do_not_log=just_read)
+  call get_param(param_file, mdl,"T_REF",T_ref,'Refernce value for temperature', &
+                 units='C', fail_if_missing=.not.just_read, do_not_log=just_read)
+
   ! The default is to assume an increase by 2 for the salinity and a uniform
   ! temperature
-  call get_param(param_file,mod,"S_RANGE",S_range,'Initial salinity range.',units='1e-3',default=2.0)
-  call get_param(param_file,mod,"T_RANGE",T_range,'Initial temperature range',units='C',default=0.0)
+  call get_param(param_file, mdl,"S_RANGE",S_range,'Initial salinity range.', &
+                 units='1e-3', default=2.0, do_not_log=just_read)
+  call get_param(param_file, mdl,"T_RANGE",T_range,'Initial temperature range', &
+                 units='C', default=0.0, do_not_log=just_read)
+
+  if (just_read) return ! All run-time parameters have been read, so return.
 
   ! Prescribe salinity
   !delta_S = S_range / ( G%ke - 1.0 )
-  
+
   !S(:,:,1) = S_ref
   !do k = 2,G%ke
   !  S(:,:,k) = S(:,:,k-1) + delta_S
-  !end do  
-    
-  deltah = G%max_depth / nz;  
+  !end do
+
+  deltah = G%max_depth / nz;
   do j=js,je ; do i=is,ie
     xi0 = 0.0
     do k = 1,nz
@@ -246,20 +247,20 @@ subroutine sloshing_initialize_temperature_salinity ( T, S, h, G, param_file, &
       xi0 = xi1
     enddo
   enddo ; enddo
-  
+
   ! Prescribe temperature
   delta_T = T_range / ( G%ke - 1.0 )
-  
+
   T(:,:,1) = T_ref
   do k = 2,G%ke
     T(:,:,k) = T(:,:,k-1) + delta_T
-  end do  
+  end do
   kdelta = 2
   T(:,:,G%ke/2 - (kdelta-1):G%ke/2 + kdelta) = 1.0
-  
+
 end subroutine sloshing_initialize_temperature_salinity
 
-!> \class sloshing_initialization
+!> \namespace sloshing_initialization
 !!
 !! The module configures the model for the non-rotating sloshing
 !! test case.
