@@ -85,11 +85,14 @@ subroutine ABMIX2D_initialize_topography ( D, G, param_file, max_depth )
 end subroutine ABMIX2D_initialize_topography
 
 !> Initialize thicknesses according to coordinate mode
-subroutine ABMIX2D_initialize_thickness ( h, G, GV, param_file )
+subroutine ABMIX2D_initialize_thickness ( h, G, GV, param_file, just_read_params )
   type(ocean_grid_type),                     intent(in)  :: G !< Ocean grid structure
   type(verticalGrid_type),                   intent(in)  :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: h !< Layer thicknesses
   type(param_file_type),                     intent(in)  :: param_file !< Parameter file structure
+  logical,       optional, intent(in)  :: just_read_params !< If present and true, this call will
+                                                      !! only read parameters without changing h.
+
   ! Local variables
   real :: e0(SZK_(G))     ! The resting interface heights, in m, usually !
                           ! negative because it is positive upward.      !
@@ -98,14 +101,20 @@ subroutine ABMIX2D_initialize_thickness ( h, G, GV, param_file )
   integer :: i, j, k, is, ie, js, je, nz
 
   real    :: botlay_thickness, excess
-
-  call get_param(param_file, mod, "ABMIX2D_INITIAL_BOTTH", botlay_thickness, &
-                 'Thickness of bottom layer above max depth, in ABMIX2D configuration.', &
-                 units='m',default=0.0)
+  logical :: just_read    ! If true, just read parameters but set nothing.
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
 
-  call MOM_mesg("MOM_initialization.F90, ABMIX2D_initialize_thickness: setting thickness")
+  just_read = .false. ; if (present(just_read_params)) just_read = just_read_params
+
+  if (.not.just_read) &
+    call MOM_mesg("MOM_initialization.F90, ABMIX2D_initialize_thickness: setting thickness")
+
+  call get_param(param_file, mod, "ABMIX2D_INITIAL_BOTTH", botlay_thickness, &
+       'Thickness of bottom layer above max depth, in ABMIX2D configuration.', &
+       units='m',default=0.0)
+
+  if (just_read) return ! All run-time parameters have been read, so return.
 
   !! The following code sets a simple constant stratification
 
