@@ -195,8 +195,8 @@ subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
 
   !   When modifying the code, comment out this error message.  It is here
   ! so that the original (unmodified) version is not accidentally used.
-  call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
-    "User forcing routine called without modification." )
+  !  call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
+!    "User forcing routine called without modification." )
 
   ! Allocate and zero out the forcing arrays, as necessary.  This portion is
   ! usually not changed.
@@ -269,15 +269,15 @@ subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
     else
       !   When modifying the code, comment out this error message.  It is here
       ! so that the original (unmodified) version is not accidentally used.
-      call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
-        "Buoyancy restoring used without modification." )
+!      call MOM_error(FATAL, "User_buoyancy_surface_forcing: " // &
+!        "Buoyancy restoring used without modification." )
 
       ! The -1 is because density has the opposite sign to buoyancy.
       buoy_rest_const = -1.0 * (CS%G_Earth * CS%Flux_const) / CS%Rho0
       do j=js,je ; do i=is,ie
        !   Set density_restore to an expression for the surface potential
        ! density in kg m-3 that is being restored toward.
-        density_restore = 1030.0
+        density_restore = 1035.00625
 
         fluxes%buoy(i,j) = G%mask2dT(i,j) * buoy_rest_const * &
                           (density_restore - state%sfc_density(i,j))
