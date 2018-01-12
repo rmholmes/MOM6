@@ -426,7 +426,7 @@ program MOM_main
     ! Set the forcing for the next steps.
     if (.not. offline_tracer_mode) then
         call set_forcing(state, fluxes, Time, Time_step_ocean, grid, &
-                     surface_forcing_CSp)
+                     GV, surface_forcing_CSp)
     endif
     if (MOM_CSp%debug) then
       call MOM_forcing_chksum("After set forcing", fluxes, grid, haloshift=0)

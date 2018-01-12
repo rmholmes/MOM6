@@ -62,6 +62,7 @@ use MOM_string_functions,    only : uppercase
 use MOM_forcing_type,        only : forcing, forcing_diags, register_forcing_type_diags, deallocate_forcing_type
 use MOM_forcing_type,        only : allocate_forcing_type, deallocate_forcing_type
 use MOM_grid,                only : ocean_grid_type
+use MOM_verticalGrid,        only : verticalGrid_type
 use MOM_get_input,           only : Get_MOM_Input, directories
 use MOM_io,                  only : file_exists, read_data, slasher, num_timelevels
 use MOM_io,                  only : EAST_FACE, NORTH_FACE
@@ -210,12 +211,13 @@ integer :: id_clock_forcing
 
 contains
 
-subroutine set_forcing(state, fluxes, day_start, day_interval, G, CS)
+subroutine set_forcing(state, fluxes, day_start, day_interval, G, GV, CS)
   type(surface),         intent(inout) :: state
   type(forcing),         intent(inout) :: fluxes
   type(time_type),       intent(in)    :: day_start
   type(time_type),       intent(in)    :: day_interval
   type(ocean_grid_type), intent(inout) :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(inout) :: GV !< The ocean's vertical grid structure
   type(surface_forcing_CS), pointer    :: CS
 
 ! This subroutine calls other subroutines in this file to get surface forcing fields.
@@ -321,7 +323,7 @@ subroutine set_forcing(state, fluxes, day_start, day_interval, G, CS)
     elseif (trim(CS%buoy_config) == "SCM_CVmix_tests") then
       call SCM_CVmix_tests_buoyancy_forcing(state, fluxes, day_center, G, CS%SCM_CVmix_tests_CSp)
     elseif (trim(CS%buoy_config) == "USER") then
-      call USER_buoyancy_forcing(state, fluxes, day_center, dt, G, CS%user_forcing_CSp)
+      call USER_buoyancy_forcing(state, fluxes, day_center, dt, G, GV, CS%user_forcing_CSp)
     elseif (trim(CS%buoy_config) == "BFB") then
       call BFB_buoyancy_forcing(state, fluxes, day_center, dt, G, CS%BFB_forcing_CSp)
     elseif (trim(CS%buoy_config) == "NONE") then

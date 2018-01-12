@@ -50,6 +50,7 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, param_file_type, log_version
 use MOM_forcing_type, only : forcing, allocate_forcing_type
 use MOM_grid, only : ocean_grid_type
+use MOM_verticalGrid,        only : verticalGrid_type
 use MOM_io, only : file_exists, read_data
 use MOM_time_manager, only : time_type, operator(+), operator(/), get_time
 use MOM_tracer_flow_control, only : call_tracer_set_forcing
@@ -145,13 +146,14 @@ subroutine USER_wind_forcing(state, fluxes, day, G, CS)
 
 end subroutine USER_wind_forcing
 
-subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
+subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, GV, CS)
   type(surface),                 intent(inout) :: state
   type(forcing),                 intent(inout) :: fluxes
   type(time_type),               intent(in)    :: day
   real,                          intent(in)    :: dt   !< The amount of time over which
                                                        !! the fluxes apply, in s
   type(ocean_grid_type),         intent(in)    :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(inout) :: GV !< The ocean's vertical grid structure
   type(user_surface_forcing_CS), pointer       :: CS
 
 !    This subroutine specifies the current surface fluxes of buoyancy or
@@ -277,7 +279,7 @@ subroutine USER_buoyancy_forcing(state, fluxes, day, dt, G, CS)
       do j=js,je ; do i=is,ie
        !   Set density_restore to an expression for the surface potential
        ! density in kg m-3 that is being restored toward.
-        density_restore = 1035.00625
+        density_restore = GV%Rlay(1)
 
         fluxes%buoy(i,j) = G%mask2dT(i,j) * buoy_rest_const * &
                           (density_restore - state%sfc_density(i,j))
