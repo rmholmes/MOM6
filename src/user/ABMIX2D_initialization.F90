@@ -3,7 +3,8 @@ module ABMIX2D_initialization
 ! Abyssal mixing 2D simulations
 !
 ! Ryan Holmes, June 2016
-  
+
+use MOM_sponge, only : sponge_CS, set_up_sponge_field, initialize_sponge
 use MOM_dyn_horgrid, only : dyn_horgrid_type
 use MOM_error_handler, only : MOM_mesg, MOM_error, FATAL
 use MOM_file_parser, only : get_param, log_version, param_file_type
@@ -21,6 +22,7 @@ implicit none ; private
 ! Public functions
 public ABMIX2D_initialize_topography
 public ABMIX2D_initialize_thickness
+public ABMIX2D_initialize_sponges
 
 character(len=40) :: mod = "ABMIX2D_initialization" !< This module's name.
 
@@ -152,5 +154,85 @@ subroutine ABMIX2D_initialize_thickness ( h, G, GV, param_file, just_read_params
   end do; end do
 
 end subroutine ABMIX2D_initialize_thickness
+
+! -----------------------------------------------------------------------------
+!> This subroutine sets the inverse restoration time (Idamp), and     !
+!! the values towards which the interface heights and an arbitrary    !
+!! number of tracers should be restored within each sponge. The       !
+!! interface height is always subject to damping, and must always be  !
+!! the first registered field.                                        !
+subroutine ABMIX2D_initialize_sponges(G, GV, PF, CSp)
+  type(ocean_grid_type), intent(in) :: G    !< The ocean's grid structure.
+  type(verticalGrid_type), intent(in) :: GV !< The ocean's vertical grid structure.
+  type(param_file_type), intent(in) :: PF   !< A structure indicating the open file to
+                                            !! parse for model parameter values.
+  type(sponge_CS),       pointer    :: CSp  !< A pointer that is set to point to the control
+                                            !! structure for this module.
+
+  real :: eta(SZI_(G),SZJ_(G),SZK_(G)+1) ! A temporary array for eta.
+  real :: Idamp(SZI_(G),SZJ_(G))    ! The inverse damping rate, in s-1.
+
+  real :: H0(SZK_(G))
+  real :: eta1D(SZK_(G))
+  real :: min_depth
+  real :: min_lat, time_scale, y
+  real :: damp, e_dense
+  character(len=40)  :: mdl = "ABMIX2D_initialize_sponges" ! This subroutine's name.
+  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = G%ke
+  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
+
+  eta(:,:,:) = 0.0 ; Idamp(:,:) = 0.0
+
+!  Here the inverse damping time, in s-1, is set. Set Idamp to 0     !
+!  wherever there is no sponge, and the subroutines that are called  !
+!  will automatically set up the sponges only where Idamp is positive!
+!  and mask2dT is 1.                                                   !
+
+!   Set up sponges for ABMIX2D configuration
+  call get_param(PF, mdl, "MINIMUM_DEPTH", min_depth, &
+                 "The minimum depth of the ocean.", units="m", default=0.0)
+  call get_param(PF, mdl, "ABMIX2D_SPONGE_MIN_LAT", min_lat, &
+                 "Min pos (as fraction of dom length) for northern wall sponge.", &
+                 units="nondim", default=1.0)
+  call get_param(PF, mdl, "ABMIX2D_SPONGE_TIME_SCALE", time_scale, &
+                 "Nudging time-scale for northern wall sponge.", &
+                 units="day-1", default=0.0)
+     do k=nz,1,-1
+     enddo
+
+  do k=1,nz ; H0(k) = -G%max_depth * real(k-1) / real(nz) ; enddo
+  do i=is,ie; do j=js,je
+
+    y = ( G%geoLatT(i,j) - G%south_lat ) / G%len_lat
+    if (y < min_lat) then ; damp = 0.0
+    else ; damp= time_scale
+    end if
+
+    ! These will be stretched inside of apply_sponge, so they can be in
+    ! depth space for Boussinesq or non-Boussinesq models.
+    eta(i,j,nz+1) = -G%bathyT(i,j)
+    do k=nz,1,-1
+        eta(i,j,k) = H0(k)
+        if (eta(i,j,k) < (eta(i,j,k+1) + GV%Angstrom_z)) then
+           eta(i,j,k) = eta(i,j,k+1) + GV%Angstrom_z
+        endif
+    enddo
+
+    if (G%bathyT(i,j) > min_depth) then
+      Idamp(i,j) = damp/86400.0
+    else ; Idamp(i,j) = 0.0 ; endif
+  enddo ; enddo
+
+!  This call sets up the damping rates and interface heights.
+!  This sets the inverse damping timescale fields in the sponges.    !
+  call initialize_sponge(Idamp, eta, G, PF, CSp)
+
+!   Now register all of the fields which are damped in the sponge.   !
+! By default, momentum is advected vertically within the sponge, but !
+! momentum is typically not damped within the sponge.                !
+
+end subroutine ABMIX2D_initialize_sponges
 
 end module ABMIX2D_initialization

@@ -61,6 +61,7 @@ use DOME2d_initialization, only : DOME2d_initialize_thickness
 use DOME2d_initialization, only : DOME2d_initialize_temperature_salinity
 use DOME2d_initialization, only : DOME2d_initialize_sponges
 use ABMIX2D_initialization, only : ABMIX2D_initialize_thickness
+use ABMIX2D_initialization, only : ABMIX2D_initialize_sponges
 use adjustment_initialization, only : adjustment_initialize_thickness
 use adjustment_initialization, only : adjustment_initialize_temperature_salinity
 use sloshing_initialization, only : sloshing_initialize_thickness
@@ -509,11 +510,13 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, PF, dirs, &
                  " \t ISOMIP - apply ale sponge in the ISOMIP case \n"//&
                  " \t DOME - use a slope and channel configuration for the \n"//&
                  " \t\t DOME sill-overflow test case. \n"//&
+                 " \t ABMIX2D - use ABMIX2D northern wall sponge \n"//&
                  " \t BFB - Sponge at the southern boundary of the domain\n"//&
                  " \t\t for buoyancy-forced basin case.\n"//&
                  " \t USER - call a user modified routine.", default="file")
     select case (trim(config))
       case ("DOME"); call DOME_initialize_sponges(G, GV, tv, PF, sponge_CSp)
+      case ("ABMIX2D"); call ABMIX2D_initialize_sponges(G, GV, PF, sponge_CSp)
       case ("DOME2D"); call DOME2d_initialize_sponges(G, GV, tv, PF, useALE, &
                                                       sponge_CSp, ALE_sponge_CSp)
       case ("ISOMIP"); call ISOMIP_initialize_sponges(G, GV, tv, PF, useALE, &
