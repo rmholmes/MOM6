@@ -135,6 +135,10 @@ type, public :: set_diffusivity_CS ; private
   real    :: Hmix            ! mixed layer thickness (meter) when
                              ! bulkmixedlayer==.false.
 
+  logical :: Kd_expdecay     ! If true, use a simple exponential decay for the diffusivity.
+  real    :: Kd0             ! Diffusivity at ocean bottom (m2/s)
+  real    :: Kdd             ! Exponential decay scale for diffusivity (m)
+
   logical :: Bryan_Lewis_diffusivity ! If true, background vertical diffusivity
                                      ! uses Bryan-Lewis (1979) like tanh profile.
   real    :: Kd_Bryan_Lewis_deep     ! abyssal value of Bryan-Lewis profile (m2/s)
@@ -674,6 +678,13 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, &
         N02_N2 = (CS%N0_2Omega/N_2Omega)**2
         Kd(i,j,k) = max(CS%Kd_min, Kd_sfc(i,j) * &
              ((abs_sin * invcosh(N_2Omega/abs_sin)) * I_x30)*N02_N2)
+      enddo ; enddo
+    elseif (CS%Kd_expdecay) then ! Exponentially decaying Kappa
+      do i=is,ie ; depth(i) = 0.0 ; enddo
+      do k=1,nz ; do i=is,ie
+        Kd(i,j,k) = Kd_sfc(i,j) + &
+                    CS%Kd0*exp((depth(i)-G%bathyT(i,j))/CS%Kdd)
+        depth(i) = depth(i) + GV%H_to_m*h(i,j,k)
       enddo ; enddo
     else
       do k=1,nz ; do i=is,ie
@@ -2706,6 +2717,19 @@ subroutine set_diffusivity_init(Time, G, GV, param_file, diag, CS, diag_to_Z_CSp
                  "calculates Kd/TKE and bounds based on exact energetics/n"//&
                  "for an isopycnal layer-formulation.", &
                  default=.false.)
+
+  call get_param(param_file, mdl, "KD_EXPONENTIAL_DECAY", CS%Kd_expdecay, &
+                 "If true, use a simple exponential decay for the diffusivity", &
+                 default=.false.)
+
+  if (CS%Kd_expdecay) then
+    call get_param(param_file, mdl, "KD_BOTTOM_DIFF", CS%Kd0, &
+                 "The diffusivity at the ocean bottom for KD_EXPONENTIAL_DECAY", &
+                 units="m2 s-1", fail_if_missing=.true.)
+    call get_param(param_file, mdl, "KD_DECAY_SCALE", CS%Kdd, &
+                 "The decay scale for KD_EXPONENTIAL_DECAY", &
+                 units="m", fail_if_missing=.true.)
+  endif
 
   call get_param(param_file, mdl, "BRYAN_LEWIS_DIFFUSIVITY", &
                                 CS%Bryan_Lewis_diffusivity, &
