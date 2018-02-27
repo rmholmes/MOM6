@@ -81,6 +81,7 @@ type, public :: entrain_diffusive_CS ; private
   real    :: sbf_decay_scale ! profile. 
   real    :: sbf_taper_scale ! profile. 
   real    :: sbf_B0          ! 
+  logical :: sbf_dexp        ! 
   type(diag_ctrl), pointer :: diag ! A structure that is used to regulate the
                              ! timing of diagnostic output.
   integer :: id_Kd = -1, id_diff_work = -1, id_Fb = -1
@@ -701,7 +702,7 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
 
     if (CS%Set_Bflux) then
     ! If Set_Bflux = True then the buoyancy flux is set explicitely
-    ! to a bottom intensified exponential profile
+    ! to a bottom intensified exponential profile. 
     ! Bf = B0*z/hBBL,          z <= hBBL
     !    = B0*exp(-(z-hBBL)/d) z >  hBBL
     ! This formula is averaged (analytically) over each layer.
@@ -720,22 +721,29 @@ subroutine entrainment_diffusive(u, v, h, tv, fluxes, dt, G, GV, CS, ea, eb, &
              zc = zc + h(i,j,k)/2.0
              zt = zb + h(i,j,k)
              minF(i,k) = 0.0
-             if (zt .le. hBBL) then
-                zs = (zc + EXP(-Hb/r)*r/h(i,j,k)*( &
-                     (r+zt)*EXP(-zt/r)-(r+zb)*exp(-zb/r)))/hBBL
-
-             elseif ((zt .gt. hBBL) .and. (zb .lt. hBBL)) then
-                zs = (0.5*(hBBL**2-zb**2) + EXP(-Hb/r)*r*( &
-                     (r+hBBL)*EXP(-hBBL/r)-(r+zb)*EXP(-zb/r)))/hBBL
-                zs = zs - EXP(hBBL/d)*(d*(EXP(-zt/d)-EXP(-hBBL/d)) &
-                     - de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-hBBL/de)))
-                zs = zs/h(i,j,k)
-
+             if (CS%sbf_dexp) then
+               ! This is the continuous double-exponential version:
+               zs = (-d*(EXP(-zt/d)-EXP(-zb/d))+(EXP(-zt*(1/d+1/hBBL)) - &
+                    EXP(-zb*(1/d+1/hBBL)))/(1/d+1/hBBL))/h(i,j,k)
              else
-                zs = - EXP(hBBL/d)*(d*(EXP(-zt/d)-exp(-zb/d)) - &
-                     de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-zb/de)))/h(i,j,k)
+               ! This is the piecewise continuous linear BBL version:
+               if (zt .le. hBBL) then
+                  zs = (zc + EXP(-Hb/r)*r/h(i,j,k)*( &
+                       (r+zt)*EXP(-zt/r)-(r+zb)*exp(-zb/r)))/hBBL
 
-             endif
+               elseif ((zt .gt. hBBL) .and. (zb .lt. hBBL)) then
+                  zs = (0.5*(hBBL**2-zb**2) + EXP(-Hb/r)*r*( &
+                       (r+hBBL)*EXP(-hBBL/r)-(r+zb)*EXP(-zb/r)))/hBBL
+                  zs = zs - EXP(hBBL/d)*(d*(EXP(-zt/d)-EXP(-hBBL/d)) &
+                       - de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-hBBL/de)))
+                  zs = zs/h(i,j,k)
+  
+               else
+                  zs = - EXP(hBBL/d)*(d*(EXP(-zt/d)-exp(-zb/d)) - &
+                       de*EXP(-Hb/r)*(EXP(-zt/de)-EXP(-zb/de)))/h(i,j,k)
+               endif
+            endif
+            
              F(i,k) = MIN(maxF(i,k),MAX(minF(i,k),dt*B0/GV%g_prime(k)*zs))
              zc = zc + h(i,j,k)/2.0
           enddo
@@ -2319,6 +2327,10 @@ subroutine entrain_diffusive_init(Time, G, GV, param_file, diag, CS)
   call get_param(param_file, mod, "SBF_B0", CS%sbf_B0, &
                  "The maximum buoyancy flux at the top of the BBL (in m2s-3).", &
                  units="m2s-3", default=1.0E-09)
+  call get_param(param_file, mod, "SBF_DEXP", CS%sbf_dexp, &
+                 "Option to use a continuous double-exponential formulation of \n"//&
+                 "the buoyancy flux profile. In this case, HBBL and B0 must \n"//&
+                 "be adjusted to account for the BBL exponential", default=.false.)
 
   CS%id_Fb = register_diag_field('ocean_model', 'buoyancy_flux', diag%axesTL, Time, &
       'Buoyancy flux as applied', 'meter2 second-3')
